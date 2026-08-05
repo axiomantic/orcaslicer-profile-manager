@@ -130,7 +130,7 @@
     "support_base_pattern_spacing": { "$ref": "defs.json#/$defs/OrcaFloat" },
     "support_interface_pattern": {
       "type": "string",
-      "enum": ["rectilinear", "concentric", "default", "auto"]
+      "enum": ["auto", "rectilinear", "rectilinear_interlaced", "concentric", "grid", "default"]
     },
     "support_interface_spacing": { "$ref": "defs.json#/$defs/OrcaFloat" },
     "support_interface_top_layers": { "$ref": "defs.json#/$defs/OrcaInt" },

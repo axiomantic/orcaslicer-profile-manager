@@ -227,6 +227,43 @@ class TestOrcaValidator(unittest.TestCase):
         res = self._validate_filament_with_setting_id("GFSG96 00@")
         self.assertFalse(res["valid"])
 
+    # --- Regression coverage: schema enums must accept every shipped value ---
+    # An enum that is missing a legitimate value fails a preset OrcaSlicer accepts
+    # happily, which reads as "the tool says my working preset is broken" and is
+    # worse than no check at all. support_interface_pattern lost this way:
+    # "rectilinear_interlaced" ships in 8 bundled profiles and lives in the binary's
+    # enum pool, but the schema listed only 4 of the 6 values.
+
+    def test_support_interface_pattern_accepts_all_shipped_values(self):
+        for value in ("auto", "rectilinear", "rectilinear_interlaced", "concentric", "grid", "default"):
+            with self.subTest(pattern=value):
+                res = self.validator.validate_file(
+                    self._write_tmp_process({"support_interface_pattern": value}), domain="process"
+                )
+                self.assertTrue(res["valid"], f"{value} rejected: {res['errors']}")
+
+    def test_support_interface_pattern_rejects_bogus_value(self):
+        res = self.validator.validate_file(
+            self._write_tmp_process({"support_interface_pattern": "zigzag"}), domain="process"
+        )
+        self.assertFalse(res["valid"])
+
+    def _write_tmp_process(self, extra):
+        """Writes a minimal valid process profile plus `extra` to a temp file."""
+        data = {
+            "type": "process",
+            "name": "ZZ Enum Probe @Unittest",
+            "layer_height": "0.2",
+            "wall_generator": "classic",
+            "sparse_infill_density": "15%",
+        }
+        data.update(extra)
+        tmp = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
+        json.dump(data, tmp)
+        tmp.close()
+        self.addCleanup(os.unlink, tmp.name)
+        return Path(tmp.name)
+
     # --- Regression coverage: keys OrcaSlicer silently ignores ---
     # OrcaSlicer's preset loader drops any key it does not recognise for the
     # preset's domain. A typo'd setting name, or a real setting written into the

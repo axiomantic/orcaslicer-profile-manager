@@ -1,167 +1,82 @@
-# OrcaSlicer Profile Manager & Validation Engine
+# OrcaSlicer Profile Manager
 
-A deterministic JSON Schema (Draft 2020-12) validation engine, profile generator, and cross-platform profile manager for OrcaSlicer configurations. Works as a CLI tool and as an **Agent Plugin & Skill** for AI coding assistants (Claude Code, Codex, Antigravity, Cursor, etc.).
+Build OrcaSlicer presets that actually load.
 
----
+OrcaSlicer discards a malformed user preset **without an error** — it just never appears in the UI. This tool validates presets against OrcaSlicer's real option tables, enforces the undocumented user-preset format rules, and reads OrcaSlicer's own log to confirm what actually loaded.
 
-## Features
+Works as a CLI and as an agent skill for Claude Code, Codex, Antigravity, and Cursor.
 
-- **Cross-Platform Directory Discovery (`locate`)**: Automatically finds built-in app profiles and user configuration directories across **macOS**, **Linux** (including Flatpak), and **Windows** (including Bambu account directories like `user/user<10digitnumber>`).
-- **Vendor Ecosystem Listing (`list-vendors`)**: Summarizes installed manufacturer ecosystems (BBL, Creality, Voron, Prusa, RatRig, etc.) with profile counts.
-- **Profile Search & Listing (`list-profiles`)**: Search installed profiles by domain, vendor, or text query with detailed metadata.
-- **Deep Profile Inspection (`inspect`)**: Displays a profile's identity, full DAG inheritance chain (`Profile -> Parent -> Base`), key domain parameters (thermals, speeds, flow, AMS IDs), schema health, and child dependents.
-- **Parameter Diffing (`diff`)**: Highlights exact parameter value deltas between two profiles.
-- **Profile Cloning & De-linking (`clone`)**: Clones built-in profiles, auto-generates a unique 16-character base62 `setting_id`, applies custom `--set` property overrides, and offers `--de-link-inherits` to flatten parent settings into an independent profile immune to stock software update corruption.
-- **Template Generation (`template`)**: Outputs valid starter skeleton JSON templates for any domain.
-- **DAG Profile Inheritance Resolution**: Reconstructs instantiated profile state by flattening parent `inherits` chains (matching C++ `Preset.cpp` logic).
-- **JSON Schema Validation (`auto`, `vendor`, `machine`, `filament`, `process`, `material-db`)**: Validates string-encoded OrcaSlicer profiles against Draft 2020-12 JSON Schemas (enforces 8-char AMS `filament_id` limits, 16-char `setting_id` bounds, string booleans `"0"`/`"1"`, string numbers, and percentages).
-
----
-
-## Installation Instructions
-
-### Prerequisites
-- Python 3.9+ installed on your system.
-
-### Option 1: Fast Setup with `uv` (Recommended)
-`uv` is an extremely fast Rust-based Python package manager.
+## Install
 
 ```bash
-# 1. Clone or navigate to the repository directory
-cd orcaslicer_validator
-
-# 2. Create virtual environment
-uv venv
-
-# 3. Activate the virtual environment
-# On macOS / Linux:
-source .venv/bin/activate
-
-# On Windows:
-# .venv\Scripts\activate
-
-# 4. Install dependencies
-uv pip install -r requirements.txt
+uv venv && uv pip install -r requirements.txt
 ```
 
-### Option 2: Standard Python Setup (`venv` + `pip`)
+Python 3.9+. Only two dependencies: `jsonschema`, `referencing`.
+
+## Quick start
+
+Find out what OrcaSlicer actually did with your presets:
+
+```console
+$ python validate_orca.py doctor
+
+Dropped presets (1)
+  [DROPPED] (process) 0.40mm Mutual Support @BBL X1C 0.8 nozzle
+            unresolved parent: 0.40mm Corrected @BBL X1C 0.8 nozzle
+
+Preset counts (files on disk vs presets OrcaSlicer loaded)
+  [MISMATCH] process   files=2 loaded=1
+```
+
+Clone a built-in profile into your user directory, correctly formatted:
 
 ```bash
-# 1. Navigate to the repository directory
-cd orcaslicer_validator
-
-# 2. Create virtual environment
-python3 -m venv venv
-
-# 3. Activate virtual environment
-# On macOS / Linux:
-source venv/bin/activate
-
-# On Windows:
-# venv\Scripts\activate
-
-# 4. Install dependencies
-pip install -r requirements.txt
+python validate_orca.py clone filament "Bambu PLA Basic @BBL X1C" \
+  --name "My PLA" --set nozzle_temperature='["225"]'
 ```
 
----
+Bad keys are rejected before anything is written:
 
-## Installing as an Agent Plugin / Skill
+```console
+$ python validate_orca.py clone filament "PolyTerra PLA @BBL X1C" \
+    --name "My PLA" --set layer_height='"0.4"'
 
-This package is structured to work natively as a skill across major AI coding assistants:
-
-### For Claude Code
-Copy or symlink the skill directory to your Claude skills folder:
-```bash
-mkdir -p ~/.claude/skills
-cp -r skills/orcaslicer-profile-manager ~/.claude/skills/
+Clone aborted: --set used keys OrcaSlicer will silently ignore:
+  ERROR: 'layer_height' is a process setting and has no effect in a filament
+         preset. OrcaSlicer silently ignores it; move it to the process preset.
 ```
 
-### For Antigravity (AGY)
-Copy or symlink the skill directory to your Antigravity global configuration:
-```bash
-mkdir -p ~/.gemini/config/skills
-cp -r skills/orcaslicer-profile-manager ~/.gemini/config/skills/
-```
+## Recipes
 
-### For Workspace Agents (Codex, Cursor, etc.)
-The repository includes `.agents/skills/orcaslicer-profile-manager` and `plugin.json` for automatic workspace detection.
+Worked, copy-pasteable setups in [references/recipes.md](skills/orcaslicer-profile-manager/references/recipes.md). Each names the exact keys, the values, why, and what **cannot** be expressed in a preset at all.
 
----
+| Recipe | Covers |
+|---|---|
+| **Large nozzle** (0.6 / 0.8 / 1.0 mm) | Layer height and line width ratios, wall loops and speeds, volumetric ceilings, temperature, pressure advance, tree support tip sizing |
+| **PLA / PETG mutual support** | Zero-gap interface, solid roof, interface speed and pattern, bed temperature compromise, `filament_is_support`, the three-preset-per-material structure |
+| **Warping mitigation** | Brim, first layer width, elephant foot, bed temperature, wall count, cooling |
 
-## Quick Start CLI Examples
+## What it does
 
-All commands can be run via `uv run python validate_orca.py <subcommand>` or `python validate_orca.py <subcommand>`:
+- **`doctor`** — reads OrcaSlicer's log and reports dropped presets, stripped keys, and a files-on-disk vs presets-loaded checksum. Exits non-zero, so it works as a gate.
+- **Known-key validation** — every setting checked against option tables extracted from the OrcaSlicer binary. Catches typos and wrong-domain keys, which OrcaSlicer ignores in silence.
+- **User-preset format enforcement** — the undocumented rules that decide whether a preset appears at all: no `type`/`setting_id`, a system parent, `from: "User"`, a `version`.
+- **Preflight checks** — aborts when OrcaSlicer is running, when a parent does not exist, or when the parent does not support the printer you are binding to.
+- **`clone`** — copies a built-in profile, writes the `.info` sidecar, and flattens automatically when the source is a user preset.
+- **`inspect` / `diff` / `list-profiles`** — resolve inheritance chains, compare deltas, search installed vendors.
 
-### 1. Discover OrcaSlicer Directories on Host OS
-```bash
-uv run python validate_orca.py locate
-```
-
-### 2. List Installed Vendor Ecosystems
-```bash
-uv run python validate_orca.py list-vendors
-uv run python validate_orca.py list-vendors --json
-```
-
-### 3. Search and List Profiles
-```bash
-uv run python validate_orca.py list-profiles --domain filament --query "PLA"
-uv run python validate_orca.py list-profiles --vendor Voron --detail
-```
-
-### 4. Deep Profile Inspection
-```bash
-uv run python validate_orca.py inspect "Bambu PLA Basic @BBL X1C"
-uv run python validate_orca.py inspect ./custom_process.json --json
-```
-
-### 5. Compare / Diff Two Profiles
-```bash
-uv run python validate_orca.py diff "0.20mm Standard @Voron" "0.20mm HighSpeed Voron"
-uv run python validate_orca.py diff ./profileA.json ./profileB.json --json
-```
-
-### 6. Clone & Customize a Built-in Profile
-```bash
-# Standard inherited clone with overrides:
-uv run python validate_orca.py clone filament "Bambu PLA Basic @BBL X1C" \
-  --name "My Custom PLA" \
-  --out custom_pla.json \
-  --set nozzle_temperature='["225"]'
-
-# Standalone clone (de-linked inheritance to prevent stock update corruption):
-uv run python validate_orca.py clone process "0.20mm Standard @Voron" \
-  --name "0.20mm Standalone Speed" \
-  --out custom_process.json \
-  --de-link-inherits \
-  --set outer_wall_speed='"180"'
-```
-
-### 7. Generate Starter Skeleton JSON Template
-```bash
-uv run python validate_orca.py template filament --out filament_custom.json
-uv run python validate_orca.py template machine --out machine_custom.json
-```
-
-### 8. Auto-Detect and Validate Profiles against JSON Schemas
-```bash
-uv run python validate_orca.py auto ./my_profiles/
-uv run python validate_orca.py auto ./my_profiles/ --json
-```
-
----
-
-## Running Unit Tests
-
-Run the included test suite to verify schema resolution and CLI subcommands:
+## Use as an agent skill
 
 ```bash
-uv run python -m unittest discover -s tests
+mkdir -p ~/.claude/skills   # or ~/.gemini/config/skills for Antigravity
+ln -s "$PWD/skills/orcaslicer-profile-manager" ~/.claude/skills/
 ```
 
----
+Symlink rather than copy — the script resolves its `schemas/` directory through the link. Codex and Cursor pick up `.agents/` and `plugin.json` automatically.
 
-## License & Credits
+## Documentation
 
-Built for the OrcaSlicer community and compatible with Draft 2020-12 JSON Schema specifications.
+[SKILL.md](skills/orcaslicer-profile-manager/SKILL.md) is the reference: the user-preset format, the serialization gotchas that are documented nowhere upstream, and the pre-generation interview.
+
+Tests: `python -m unittest discover -s tests`

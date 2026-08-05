@@ -162,27 +162,101 @@ PLA and PETG do not bond to each other. Use one material as the support
 interface for the other. The support comes off cleanly and leaves a smooth
 surface.
 
-### Preset structure for this recipe: three flat presets
+### Preset structure for this recipe: three filament presets per material
 
-This recipe needs one process preset and two filament presets. The two filament
-presets share values, for example the plate temperature pair from section 2.4.
-**Do not build a shared base preset for those values.** OrcaSlicer cannot load a
-user preset that inherits from another user preset.
+Each material needs three filament presets. Each preset serves one role.
 
-Build this structure:
+| Role | Preset name pattern | Purpose |
+|---|---|---|
+| Single-Material | `<Material> Single-Material` | The material prints alone. No compromise value. |
+| Model | `<Material> Model` | The material is the model in a two-material job. |
+| Support Interface | `<Material> Support Interface` | The material is the support interface for the other material. |
+
+This recipe therefore needs six filament presets and one process preset. Build
+this structure:
 
 ```
-[Generic PLA @BBL X1C]    (SYSTEM)  ──> [Mutual Support PLA]    (user, flat)
-[Generic PETG HF @BBL X1C](SYSTEM)  ──> [Mutual Support PETG]   (user, flat)
-[0.20mm Standard @BBL X1C](SYSTEM)  ──> [Mutual Support 0.20mm] (user, flat)
+[Generic PLA @BBL X1C]     (SYSTEM) ──> [PLA Single-Material]      (user, flat)
+                                    ──> [PLA Model]                (user, flat)
+                                    ──> [PLA Support Interface]    (user, flat)
+[Generic PETG HF @BBL X1C] (SYSTEM) ──> [PETG Single-Material]     (user, flat)
+                                    ──> [PETG Model]               (user, flat)
+                                    ──> [PETG Support Interface]   (user, flat)
+[0.20mm Standard @BBL X1C] (SYSTEM) ──> [Mutual Support 0.20mm]    (user, flat)
 ```
 
 Each filament preset names a **system** filament profile in `inherits`. Each
-filament preset repeats the shared values in its own body. Write the plate
-temperature pair into both filament files.
+filament preset repeats the shared values in its own body, for example the plate
+temperature pair from section 2.4. **Do not build a shared base preset for those
+values.** OrcaSlicer cannot load a user preset that inherits from another user
+preset.
 
 Tell the operator this before you generate: a later change to a shared value must
-be applied to both files. There is no single place to edit it.
+be applied to every file that holds it. There is no single place to edit it.
+
+> [!IMPORTANT]
+> Never name a preset `Base`. The word is ambiguous. See § "Naming: do not use
+> the word Base" below.
+
+### There is no support-body filament preset
+
+The support **body** does not touch the model. Only the support **interface**
+touches the model. The support body therefore has no reason to use a different
+material.
+
+OrcaSlicer already handles this. `support_filament` (process domain, int string)
+defaults to `"0"`, which means "the same filament as the model". The support body
+rides along on the model filament at no extra cost.
+
+Do not build a third filament preset for the support body. Such a preset is
+actively harmful:
+
+- OrcaSlicer assigns filaments per AMS slot. One slot maps to one filament preset.
+- A separate support-body preset for a material that is already loaded needs a
+  **second** AMS slot for that same material.
+- The printer then changes filament every time it switches between the model and
+  the support body.
+- Each filament change costs a large purge, 600 to 800 mm³ for a PLA/PETG pair.
+
+The cost is high. The benefit is zero.
+
+### Why the Single-Material preset exists
+
+A Model preset carries a compromise bed temperature. The compromise lets two
+materials share one plate (see section 2.4). A solo print does not need that
+compromise, and the compromise costs bed adhesion.
+
+Measured example on the Bambu X1C:
+
+| Preset | Bed temperature |
+|---|---|
+| `Generic PETG HF @BBL X1C` (stock, PETG alone) | 70 C |
+| `PolyTerra PLA @BBL X1C` (stock, PLA alone) | 55 C |
+| PLA/PETG compromise (Model presets) | 60 C |
+
+A PETG solo print with the Model preset loses 10 C of bed adhesion for no reason.
+The Single-Material preset keeps the stock value. It is not redundant.
+
+### Naming: do not use the word Base
+
+The word "base" has two meanings in this domain, and the collision causes real
+errors:
+
+- **support base** means the bulk support structure, the counterpart of the
+  support interface.
+- **base profile** reads as the plain single-material profile.
+
+Use these names instead:
+
+| Instead of | Use |
+|---|---|
+| `Base` (plain solo profile) | `Single-Material` |
+| `Base` (multi-material model role) | `Model` |
+| `Base` (support role) | `Support Interface` |
+
+The word can no longer mean "parent preset" either. Every user preset is flat, so
+a user preset has no user parent. That removes the last legitimate use of the
+word.
 
 ### 2.1 Process domain: zero-gap interface
 
@@ -264,16 +338,19 @@ A value of `"0"` means the filament does not support that plate.
 > [!WARNING]
 > **Support interface assignment needs an AMS slot index you do not have.**
 > `support_interface_filament` and `support_filament` are process-domain int
-> strings that hold an extruder/filament **index**. `"0"` means auto, that is, the
-> same filament as the model. The correct index depends on the operator's AMS slot
-> layout. Do not hardcode a guess. Ask the operator for the slot number, or leave
-> the keys at `"0"` and tell the operator to set the filament in the UI.
+> strings that hold an extruder/filament **index**. Both default to `"0"`. `"0"`
+> means auto, that is, the same filament as the model. Set
+> `support_interface_filament` to the slot that holds the interface material.
+> Leave `support_filament` at `"0"` so the support body follows the model
+> filament. The correct index depends on the operator's AMS slot layout. Do not
+> hardcode a guess. Ask the operator for the slot number, or leave both keys at
+> `"0"` and tell the operator to set the filament in the UI.
 
 - **You cannot assign a per-object support material from a preset.** Per-object
   overrides live in the project file, not the preset.
-- **You cannot share the two filament presets' common values through a base
-  preset.** A user preset cannot inherit from another user preset. Repeat the
-  shared values in each file.
+- **You cannot share the filament presets' common values through a base preset.**
+  A user preset cannot inherit from another user preset. Repeat the shared values
+  in each file.
 
 ---
 

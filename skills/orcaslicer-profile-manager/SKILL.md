@@ -259,6 +259,13 @@ generate anything**:
 Get the operator's acknowledgement. Do not generate the presets before the
 operator answers.
 
+**Never name a preset `Base`.** The word is ambiguous. "Support base" means the
+bulk support structure. "Base profile" reads as the plain single-material
+profile. The word can no longer mean "parent preset" either, because every user
+preset is flat. Use `Single-Material` for a plain solo-printing profile. Use
+`Model` and `Support Interface` for the multi-material roles. See
+[Recipes](references/recipes.md) § "Naming: do not use the word Base".
+
 ### 3. Printer-bound or universal?
 
 See § 5 "Cloning Profiles: Inherited vs Independent" for the exact question and
