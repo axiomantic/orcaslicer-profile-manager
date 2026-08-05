@@ -19,9 +19,80 @@ OrcaSlicer configuration properties (originating from C++ `ConfigOption` in `lib
 | `int` | String integer | `"7500"` | `7500` |
 | `float`/`double` | String double | `"0.4"`, `"215.0"` | `0.4` |
 | `percent` | String appended with `%` | `"15%"` | `0.15`, `15` |
-| `setting_id` | 16-char base62 string (system profiles only — see §5) | `"CUSTPLAPRINTER01"` | 17 characters |
-| `filament_id` | Max 8-char string (AMS limit) | `"CPLA0001"` | `"LONG_FILAMENT_ID"` |
+| `setting_id` | Alphanumeric plus `_` and `-`; observed length 5–16 (system profiles only — see §5) | `"GFSG96_00"`, `"CUSTPLAPRINTER01"` | `"has space"`, `"has@sign"` |
+| `filament_id` | String. OrcaSlicer enforces no length. Bambu AMS ids use the 5-char `GF` + 3 form | `"GFL01"`, `"GFG96"` | — |
 | `extruder_array` | Any scalar field may be a single value or an array of one value per extruder | `"0.98"` or `["0.98", "0.98"]` | mixing types within the array |
+
+---
+
+## Undocumented Serialization Gotchas
+
+The table above covers the documented rules. The five rules below are not
+documented upstream. Each one was confirmed against the OrcaSlicer 2.4.2 option
+tables and the bundled vendor profiles.
+
+### 1. The `"nil"` sentinel
+
+Filament-level printer overrides use the literal string `"nil"` to mean "use the
+printer default". The sentinel is set per extruder variant. Affected keys
+include:
+
+- `filament_retraction_length`
+- `filament_retraction_speed`
+- `filament_wipe`
+- `filament_wipe_distance`
+- `filament_z_hop`
+- `filament_retract_before_wipe`
+
+A mixed array such as `["1","nil","1","nil"]` is normal. It overrides variants 1
+and 3 and leaves variants 2 and 4 at the printer default.
+
+### 2. Per-extruder-variant array arity is not uniform
+
+Many options serialize as an array with one element per entry in
+`print_extruder_variant` or `filament_extruder_variant`. The X1C has 2 variants.
+The H2D and X2D have 4.
+
+Arity is **not** uniform across keys inside one preset. In
+`PolyTerra PLA @BBL X1C`, `nozzle_temperature` is `["220","220"]` (2 elements)
+while `hot_plate_temp` is `["55"]` (1 element).
+
+> [!IMPORTANT]
+> **Rule: match the arity that the parent profile uses for that same key.** Read
+> the parent value first with `inspect`. Do not assume the variant count.
+
+### 3. Unknown keys are silently ignored
+
+OrcaSlicer discards a key it does not recognize. It reports no error. Real vendor
+bundles ship dead keys, so **copying a key from a vendor profile does not prove
+the key is real**. Confirmed dead keys:
+
+| Dead key | Why it is dead |
+|---|---|
+| `bottom_surface_line_width` | Never existed. Bottom solid surfaces use `internal_solid_infill_line_width`. |
+| `keep_fan_always_on` | Legacy. Superseded by `reduce_fan_stop_start_freq`. |
+| `tree_support_bramch_diameter_angle` | Prusa typo for `branch`. |
+| `slow_down_curled_perimeters` | Cubicon typo. The real key is `slowdown_for_curled_perimeters`. |
+| `epoxy_resin_plate_temp`, `customized_plate_temp` | Creality-only. Not in the OrcaSlicer option table. |
+| `nozzle_temperature_intial_layer` | Typo for `nozzle_temperature_initial_layer`. |
+
+### 4. Real `setting_id` and `filament_id` character sets
+
+- `setting_id` uses alphanumeric characters plus underscore and hyphen. Observed
+  length is 5 to 16 characters, for example `GFSG96_00`. The 16-char base62
+  description in the table above is the upper bound, not a fixed width.
+- `filament_id` has **no enforced length** in OrcaSlicer. The 8-character rule is
+  a Bambu AMS RFID convention, not a slicer constraint. Bambu's own ids use the
+  5-character `GF` + 3 form.
+
+### 5. OrcaSlicer must not be running while you write presets
+
+OrcaSlicer rewrites its preset state on exit. It discards files that were written
+while it was running.
+
+1. Quit OrcaSlicer.
+2. Write the preset files.
+3. Start OrcaSlicer. New presets appear.
 
 ---
 
@@ -56,6 +127,68 @@ hand-write user preset JSON. If you ever do write one by hand (e.g. via
 the `warnings` array; it lints exactly these rules (tagged
 `[user-preset format]`) even when the file is otherwise schema-valid, because
 schema-valid does **not** mean OrcaSlicer's loader will show it.
+
+---
+
+## Before You Generate: Operator Interview
+
+> [!IMPORTANT]
+> Complete all six steps below **before** you generate any profile. Each step
+> comes from an observed failure. Use the `ask_question` tool for every question.
+> Do not guess an answer.
+
+### 1. Classify every requested change by domain first
+
+Sort each requested change into `process`, `filament`, or `machine` **before you
+write anything**. OrcaSlicer silently ignores a process key that is placed in a
+filament preset. It reports no error, and the setting does nothing.
+
+About 60% of a typical "tune my filament" request is actually process domain.
+Layer height, line width, wall count, speeds, supports, and brims are all
+process. Temperatures, flow, cooling fans, and volumetric limits are filament.
+
+Split the work into a process preset and a filament preset. **Tell the operator
+the split before you build.** See [Recipes](references/recipes.md), which marks
+the domain of every key.
+
+### 2. Printer-bound or universal?
+
+See § 5 "Cloning Profiles: Inherited vs Independent" for the exact question and
+the naming rule. Ask it now, not after you generate.
+
+### 3. Which build plate?
+
+The answer selects which of the twelve `*_plate_temp` keys to set. OrcaSlicer
+reads only the pair for the plate that the operator selects, so a correct value
+on the wrong plate does nothing. **Do not guess the plate.** See
+[Recipes](references/recipes.md) § 2.4 for the full twelve-key table.
+
+### 4. Single-material or multi-material?
+
+A multi-material job needs AMS slot indices. `support_interface_filament` and
+`support_filament` hold an extruder/filament index that depends on the operator's
+own slot layout. Only the operator knows it. Ask for the slot numbers, or leave
+the keys at `"0"` (auto) and tell the operator to set them in the UI.
+
+### 5. Confirm that the parent profile exists
+
+A hallucinated parent name is a real observed failure. `Generic PETG @BBL X1C`
+does **not** exist. The real profiles are `Generic PETG HF @BBL X1C` and
+`Generic PETG @base`.
+
+Verify every name before you put it in `inherits`:
+```bash
+python validate_orca.py list-profiles --domain filament --query "PETG"
+```
+
+### 6. Confirm the parent's `compatible_printers`
+
+The parent's `compatible_printers` must include the exact machine preset name you
+bind to, for example `Bambu Lab X1 Carbon 0.8 nozzle`. If it does not, the preset
+will not appear for that printer.
+```bash
+python validate_orca.py inspect "<parent name>" --json
+```
 
 ---
 
@@ -181,3 +314,4 @@ python validate_orca.py auto <path/to/profile.json> --json
 - [Finding & Cloning Built-in Profiles](references/finding_and_cloning_builtin_profiles.md)
 - [Generation Guide](references/generation_rules.md)
 - [Editing & DAG Inheritance Guide](references/editing_rules.md)
+- [Worked Profile Recipes](references/recipes.md)

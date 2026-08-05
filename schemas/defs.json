@@ -87,9 +87,9 @@
         "from": { "type": "string" },
         "instantiation": { "$ref": "#/$defs/OrcaBool" },
         "setting_id": {
-          "description": "16-char base62 for cloned/user profiles, but OrcaSlicer's own system bundles also use short legacy codes (e.g. 'GP004'), so the pattern only checks charset, not length.",
+          "description": "16-char base62 for cloned/user profiles, but OrcaSlicer's own system bundles also use short legacy codes (e.g. 'GP004') and some codes include underscore/hyphen (e.g. 'GFSG96_00', 'BFLSBS99-1'), so the pattern only checks charset, not length.",
           "type": "string",
-          "pattern": "^[a-zA-Z0-9]{1,32}$"
+          "pattern": "^[a-zA-Z0-9_\\-]{1,32}$"
         },
         "version": {
           "type": "string",

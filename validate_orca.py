@@ -26,9 +26,11 @@ import sys
 import os
 import json
 import argparse
+import difflib
 import platform
 import random
 import string
+import subprocess
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple, Set
 
@@ -117,6 +119,126 @@ def lint_user_preset(profile_data: Dict[str, Any], domain: str) -> List[str]:
     if settings_id_key and not profile_data.get(settings_id_key):
         violations.append(f"'{settings_id_key}' is missing/empty; it should match 'name'.")
     return violations
+
+
+# OrcaSlicer's preset loader silently drops any key it does not recognise: a typo'd
+# setting name, or a setting written into the wrong domain, produces no error and
+# simply does nothing. schemas/known_keys.json carries the real per-domain option
+# names lifted out of the OrcaSlicer binary (see tools/extract_known_keys.py), which
+# lets us catch that class of mistake before it reaches disk.
+KNOWN_KEYS_FILE = Path(__file__).resolve().parent / "schemas" / "known_keys.json"
+
+
+def _load_known_keys() -> Optional[Dict[str, Any]]:
+    """Loads schemas/known_keys.json. Returns None if it is missing or unusable, in
+    which case known-key checking is skipped entirely rather than failing the run."""
+    try:
+        with open(KNOWN_KEYS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    domains = {}
+    for domain in DOMAIN_SETTINGS_ID_KEY:
+        keys = data.get(domain)
+        if not isinstance(keys, list) or not keys:
+            return None
+        domains[domain] = set(keys)
+    metadata = data.get("metadata")
+    return {
+        "domains": domains,
+        "metadata": set(metadata) if isinstance(metadata, list) else set(),
+        "version": (data.get("_source") or {}).get("orcaslicer_version"),
+    }
+
+
+KNOWN_KEYS = _load_known_keys()
+
+KNOWN_KEYS_UNAVAILABLE_NOTE = (
+    f"Note: {KNOWN_KEYS_FILE.name} is missing or unreadable, so unknown-setting "
+    f"checking is disabled. Regenerate it with tools/extract_known_keys.py."
+)
+
+
+def lint_unknown_keys(profile_data: Dict[str, Any], domain: str) -> List[str]:
+    """Checks every key in a profile against the option names OrcaSlicer actually
+    accepts for that domain. Returns one human-readable message per key that is
+    neither a known option for `domain` nor recognised preset metadata; empty list
+    means every key will really take effect. Silently returns [] when the key tables
+    are unavailable, or for domains OrcaSlicer has no option table for (e.g. vendor)."""
+    if KNOWN_KEYS is None or domain not in KNOWN_KEYS["domains"]:
+        return []
+    if not isinstance(profile_data, dict):
+        return []
+    own = KNOWN_KEYS["domains"][domain]
+    violations = []
+    for key in profile_data:
+        if key in own or key in KNOWN_KEYS["metadata"] or key.endswith("_settings_id"):
+            continue
+        other = [d for d in DOMAIN_SETTINGS_ID_KEY if key in KNOWN_KEYS["domains"][d]]
+        if other:
+            owners = " or ".join(other)
+            violations.append(
+                f"'{key}' is a {owners} setting and has no effect in a {domain} preset. "
+                f"OrcaSlicer silently ignores it; move it to the {owners} preset."
+            )
+        else:
+            violations.append(
+                f"'{key}' is not a known {domain} setting (typo, or removed from this "
+                f"OrcaSlicer version). OrcaSlicer silently ignores unknown keys, so it "
+                f"will have no effect."
+            )
+    return violations
+
+
+# OrcaSlicer rewrites its whole preset state to disk when it exits, so a preset file
+# written while the app is open is overwritten/discarded on quit — the operator sees
+# no error anywhere, just a preset that never appears. Detection is best-effort: a
+# probe that cannot answer must never stop the tool.
+ORCASLICER_PROCESS_NAME = "OrcaSlicer"
+
+
+def is_orcaslicer_running() -> Optional[bool]:
+    """Returns True if a running OrcaSlicer process was detected, False if none was, or
+    None when detection itself is unavailable (probe binary missing, unsupported
+    platform, timeout). Never raises."""
+    try:
+        if platform.system() == "Windows":
+            proc = subprocess.run(["tasklist"], capture_output=True, text=True, timeout=10)
+            if proc.returncode != 0:
+                return None
+            return ORCASLICER_PROCESS_NAME.lower() in proc.stdout.lower()
+        proc = subprocess.run(["pgrep", "-f", ORCASLICER_PROCESS_NAME], capture_output=True, text=True, timeout=10)
+        # pgrep exits 1 with empty output when nothing matched; anything above that is
+        # a real failure of the probe rather than an answer.
+        if proc.returncode not in (0, 1):
+            return None
+        # "-f" matches full command lines, so this tool matches itself whenever it is
+        # run from a path containing the app name. Never count our own process tree.
+        own = {str(os.getpid()), str(os.getppid())}
+        pids = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+        return any(pid not in own for pid in pids)
+    except Exception:
+        return None
+
+
+def resolve_effective_compatible_printers(resolver: "ProfileDAGResolver", parent_name: str) -> Optional[List[str]]:
+    """Returns the compatible_printers list `parent_name` effectively declares once its
+    own inheritance chain is merged. Returns None when the parent is unknown or when the
+    whole chain declares none at all — an abstract "@base"-style profile, which
+    OrcaSlicer treats as compatible with everything."""
+    parent = resolver.name_index.get(parent_name)
+    if not parent:
+        return None
+    merged, _ = resolver.resolve(parent)
+    printers = merged.get("compatible_printers")
+    if isinstance(printers, str):
+        printers = [printers]
+    if not isinstance(printers, list) or not printers:
+        return None
+    return printers
+
 
 SKELETON_TEMPLATES = {
     "vendor": {
@@ -566,6 +688,26 @@ class OrcaValidator:
             for lint_msg in lint_user_preset(data, target_domain):
                 warnings.append(f"[user-preset format] {lint_msg}")
 
+        # A preset naming a parent that does not exist is silently dropped by OrcaSlicer's
+        # loader: the file is perfectly valid, and the preset simply never appears in the
+        # UI. The parent is very often another *user* preset, so this resolves against
+        # everything the DAG resolver indexed (built-in and user directories alike) —
+        # checking only the built-in bundles would flag legitimate user-to-user chains.
+        if looks_like_user_preset and isinstance(data, dict):
+            inherits = data.get("inherits")
+            if inherits and inherits not in self.dag_resolver.name_index:
+                warnings.append(
+                    f"[unresolved inherits] Parent profile '{inherits}' was not found in any indexed "
+                    f"profile directory. OrcaSlicer silently drops a preset whose parent cannot be "
+                    f"resolved; run 'list-profiles' to find the exact parent name."
+                )
+
+        # Keys OrcaSlicer does not recognise for this domain are accepted by the schema
+        # but silently dropped by the preset loader, so surface them as warnings too.
+        if isinstance(data, dict) and target_domain in DOMAIN_SETTINGS_ID_KEY:
+            for lint_msg in lint_unknown_keys(data, target_domain):
+                warnings.append(f"[unknown key] {lint_msg}")
+
         return result
 
 
@@ -605,6 +747,24 @@ def search_installed_profiles(paths: List[Path], domain: Optional[str] = None, v
                 if not p_type:
                     if "machine_model_list" in data or "machine_list" in data:
                         p_type = "vendor"
+                    else:
+                        # Valid USER presets deliberately carry no "type" key (this is
+                        # required by OrcaSlicer's user-preset format — see SKILL.md
+                        # § "User Presets vs System Presets"). Without this fallback,
+                        # every user preset gets p_type = None and is silently rejected
+                        # by the domain filter below, making them invisible as clone
+                        # sources. Infer the domain from whichever domain identity key
+                        # is present in the body, falling back to the containing
+                        # directory name (user presets live in user/default/<domain>/).
+                        for candidate_domain, id_key in DOMAIN_SETTINGS_ID_KEY.items():
+                            if id_key in data:
+                                p_type = candidate_domain
+                                break
+                        else:
+                            for part in file_path.parts:
+                                if part in DOMAIN_SETTINGS_ID_KEY:
+                                    p_type = part
+                                    break
 
                 if domain and domain != "all" and domain != "auto":
                     if domain == "machine" and p_type not in ("machine", "machine_model"):
@@ -796,6 +956,9 @@ SUBCOMMAND SUMMARY:
     clone_parser.add_argument("--profiles-dir", type=str, help="Custom built-in profiles directory to search")
     clone_parser.add_argument("--schema-dir", type=str, help="Custom schema directory")
     clone_parser.add_argument("--no-validate", action="store_true", help="Skip schema validation after cloning")
+    clone_parser.add_argument("--allow-unknown-keys", action="store_true", help="Downgrade the abort on an unknown/wrong-domain --set key to a warning (for settings added by a newer OrcaSlicer than schemas/known_keys.json was extracted from)")
+    clone_parser.add_argument("--ignore-running", action="store_true", help="Downgrade the abort on a running OrcaSlicer process to a warning (OrcaSlicer discards presets written while it is open)")
+    clone_parser.add_argument("--skip-compat-check", action="store_true", help="Downgrade the abort on a --compatible-printers value the parent chain does not support to a warning")
 
     return parser
 
@@ -1102,6 +1265,19 @@ def main():
 
     # Subcommand: clone
     if args.subcommand == "clone":
+        # Nothing below is worth doing while OrcaSlicer is open: it rewrites its preset
+        # state on exit and throws away whatever was written behind its back. Checked
+        # first so the abort costs nothing. A "cannot determine" answer never blocks.
+        running = is_orcaslicer_running()
+        if running:
+            if args.ignore_running:
+                print(colorize("OrcaSlicer appears to be running; writing anyway (--ignore-running).", Colors.WARNING), file=sys.stderr)
+            else:
+                print(colorize("Clone aborted: OrcaSlicer is running.", Colors.FAIL), file=sys.stderr)
+                print("  OrcaSlicer rewrites its preset state when it exits and will discard any preset written while it is open.", file=sys.stderr)
+                print("  Quit OrcaSlicer, then re-run. Pass --ignore-running to write anyway.", file=sys.stderr)
+                sys.exit(1)
+
         source_path = None
         target_p = Path(args.target)
         if target_p.exists() and target_p.is_file():
@@ -1146,6 +1322,21 @@ def main():
         #     not the link target.
         parent_name = raw_source.get("name") or args.target
 
+        # A hallucinated --inherits target is this tool's most expensive silent failure:
+        # the preset writes, validates, and then never appears, because OrcaSlicer drops
+        # any preset whose parent cannot be resolved. Only an *explicit* --inherits is
+        # checked — the normal path inherits the cloned source's own name, which exists
+        # by construction, so re-resolving it could only ever produce a false alarm.
+        if args.inherits and args.inherits not in resolver.name_index:
+            print(colorize(f"Clone aborted: --inherits '{args.inherits}' does not name any installed profile.", Colors.FAIL), file=sys.stderr)
+            close = difflib.get_close_matches(args.inherits, list(resolver.name_index), n=5)
+            if close:
+                print("  Closest installed profile names:", file=sys.stderr)
+                for c in close:
+                    print(f"    - {c}", file=sys.stderr)
+            print("  Run 'validate_orca.py list-profiles --query <text>' to find the exact parent name.", file=sys.stderr)
+            sys.exit(1)
+
         if args.de_link_inherits:
             print("De-linking profile inheritance (flattening parent chain for independence)...")
             profile_data, _ = resolver.resolve(raw_source)
@@ -1168,6 +1359,30 @@ def main():
         if args.compatible_printers:
             profile_data["compatible_printers"] = args.compatible_printers
 
+            # OrcaSlicer only offers a preset for a printer that its *parent chain* also
+            # accepts. Binding a child to a printer the parent does not support leaves a
+            # perfectly valid file that is invisible in the UI for that printer. A parent
+            # chain declaring no compatible_printers at all is abstract (an "@base"
+            # profile) and is compatible with everything, so it never blocks.
+            parent_printers = resolve_effective_compatible_printers(resolver, profile_data["inherits"])
+            unsupported = [p for p in args.compatible_printers if p not in parent_printers] if parent_printers else []
+            if unsupported:
+                headline = (
+                    f"Parent profile '{profile_data['inherits']}' does not support: "
+                    + ", ".join(f"'{p}'" for p in unsupported)
+                )
+                supported = "  Parent supports only: " + ", ".join(f"'{p}'" for p in parent_printers)
+                if args.skip_compat_check:
+                    print(colorize(f"WARNING: {headline} (--skip-compat-check)", Colors.WARNING), file=sys.stderr)
+                    print(supported, file=sys.stderr)
+                else:
+                    print(colorize(f"Clone aborted: {headline}", Colors.FAIL), file=sys.stderr)
+                    print(supported, file=sys.stderr)
+                    print("  The preset would be valid but invisible in OrcaSlicer for that printer.", file=sys.stderr)
+                    print("  Clone a parent that supports it, or pass --skip-compat-check to write anyway.", file=sys.stderr)
+                    sys.exit(1)
+
+        set_keys = []
         if args.set:
             for kv in args.set:
                 if "=" not in kv:
@@ -1179,6 +1394,26 @@ def main():
                 except Exception:
                     parsed_val = v
                 profile_data[k] = parsed_val
+                set_keys.append(k)
+
+        # A --set key OrcaSlicer does not know is worse than useless: the clone writes
+        # fine, the slicer loads it, and the setting silently does nothing. Catch it
+        # before anything reaches disk.
+        if set_keys:
+            if KNOWN_KEYS is None:
+                print(colorize(KNOWN_KEYS_UNAVAILABLE_NOTE, Colors.WARNING), file=sys.stderr)
+            unknown_violations = lint_unknown_keys({k: profile_data[k] for k in set_keys}, args.domain)
+            if unknown_violations:
+                if args.allow_unknown_keys:
+                    print(colorize("Proceeding with unrecognised --set keys (--allow-unknown-keys):", Colors.WARNING), file=sys.stderr)
+                    for v in unknown_violations:
+                        print(f"  WARNING: {v}", file=sys.stderr)
+                else:
+                    print(colorize("Clone aborted: --set used keys OrcaSlicer will silently ignore:", Colors.FAIL), file=sys.stderr)
+                    for v in unknown_violations:
+                        print(f"  ERROR: {v}", file=sys.stderr)
+                    print("  Pass --allow-unknown-keys to write the preset anyway.", file=sys.stderr)
+                    sys.exit(1)
 
         lint_violations = lint_user_preset(profile_data, args.domain)
         if lint_violations:
