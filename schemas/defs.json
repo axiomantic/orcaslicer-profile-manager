@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://orcaslicer.schema/defs.json",
+  "$defs": {
+    "OrcaBool": {
+      "description": "Represents a C++ bool serialized as binary string or boolean string.",
+      "type": "string",
+      "pattern": "^(0|1|true|false)$"
+    },
+    "OrcaInt": {
+      "description": "Represents a C++ integer serialized as a string.",
+      "type": "string",
+      "pattern": "^[-+]?[0-9]+$"
+    },
+    "OrcaFloat": {
+      "description": "Represents a C++ double/float serialized as a string.",
+      "type": "string",
+      "pattern": "^[-+]?[0-9]*\\.?[0-9]+([eE][-+]?[0-9]+)?$"
+    },
+    "OrcaPercent": {
+      "description": "A percentage value used for dynamic scalar calculations.",
+      "type": "string",
+      "pattern": "^[-+]?[0-9]*\\.?[0-9]+%$"
+    },
+    "OrcaFloatOrPercent": {
+      "description": "A polymorphic type accepting either a static float or a relative percentage.",
+      "anyOf": [
+        { "$ref": "#/$defs/OrcaFloat" },
+        { "$ref": "#/$defs/OrcaPercent" }
+      ]
+    },
+    "OrcaStringArray": {
+      "description": "An array of standard strings.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "OrcaExtruderArray": {
+      "description": "Accommodates multi-extruder variables where values can be scalar or per-extruder arrays.",
+      "anyOf": [
+        { "type": "string" },
+        {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      ]
+    },
+    "BaseProfileProperties": {
+      "description": "Mandatory identity metadata for all OrcaSlicer presets, governing internal DAG resolution.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["machine_model", "machine", "filament", "process"]
+        },
+        "name": { "type": "string" },
+        "inherits": { "type": "string" },
+        "from": { "type": "string" },
+        "instantiation": { "$ref": "#/$defs/OrcaBool" },
+        "setting_id": { 
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9]{16}$"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$"
+        }
+      },
+      "required": ["type", "name"]
+    }
+  }
+}

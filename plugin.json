@@ -1,0 +1,9 @@
+{
+  "name": "orcaslicer-profile-manager",
+  "version": "1.0.0",
+  "description": "Agent plugin for generating, editing, resolving DAG inheritance, and validating OrcaSlicer printing profiles (vendor, machine, filament, process, material-db).",
+  "author": "Antigravity Team",
+  "skills": [
+    "skills/orcaslicer-profile-manager"
+  ]
+}

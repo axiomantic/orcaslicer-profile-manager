@@ -1,0 +1,7 @@
+{
+  "type": "filament",
+  "name": "Invalid Filament Test",
+  "filament_id": "TOO_LONG_FILAMENT_ID_EXCEEDS_8",
+  "filament_type": ["PLA"],
+  "instantiation": "true"
+}

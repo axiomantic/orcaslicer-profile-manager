@@ -1,0 +1,10 @@
+{
+  "type": "process",
+  "name": "0.20mm Standard @Voron",
+  "inherits": "fdm_process_common",
+  "setting_id": "PROC020VORON0001",
+  "version": "1.9.0.0",
+  "compatible_printers": ["Voron 2.4 350 0.4 nozzle"],
+  "outer_wall_speed": "150",
+  "inner_wall_speed": "200"
+}

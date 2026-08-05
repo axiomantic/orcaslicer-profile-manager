@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://orcaslicer.schema/material_database.json",
+  "title": "Hardware Material Database JSON Mapping",
+  "type": "object",
+  "additionalProperties": {
+    "type": "object",
+    "properties": {
+      "base": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "meterialType": { "type": "string" },
+          "name": { "type": "string" },
+          "brand": { "type": "string" },
+          "minTemp": { "type": "number" },
+          "maxTemp": { "type": "number" }
+        },
+        "required": ["id", "meterialType"]
+      },
+      "kvParam": {
+        "type": "object",
+        "properties": {
+          "nozzle_temperature": { "type": "number" },
+          "filament_max_volumetric_speed": { "type": "number" }
+        }
+      }
+    },
+    "required": ["base"]
+  }
+}

@@ -1,0 +1,261 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://orcaslicer.schema/process.json",
+  "title": "OrcaSlicer Process Execution Profile Schema",
+  "allOf": [
+    { "$ref": "defs.json#/$defs/BaseProfileProperties" }
+  ],
+  "properties": {
+    "type": {
+      "const": "process"
+    },
+    "compatible_printers": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "compatible_printers_condition": {
+      "type": "string"
+    },
+    "print_settings_id": { "type": "string" },
+    
+    "layer_height": { "$ref": "defs.json#/$defs/OrcaFloat" },
+    "initial_layer_print_height": { "$ref": "defs.json#/$defs/OrcaFloat" },
+    "resolution": { "$ref": "defs.json#/$defs/OrcaFloat" },
+    "slicing_mode": {
+      "type": "string",
+      "enum": ["regular", "close_holes", "even_odd"]
+    },
+    "spiral_mode": { "$ref": "defs.json#/$defs/OrcaBool" },
+    "slice_closing_radius": { "$ref": "defs.json#/$defs/OrcaFloat" },
+
+    "wall_generator": {
+      "type": "string",
+      "enum": ["arachne", "classic"]
+    },
+    "wall_loops": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "wall_infill_order": {
+      "type": "string",
+      "enum": ["inner wall/outer wall/infill", "outer wall/inner wall/infill", "infill/inner wall/outer wall"]
+    },
+    "wall_distribution_count": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "wall_transition_angle": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "wall_transition_filter_deviation": { "$ref": "defs.json#/$defs/OrcaPercent" },
+    "wall_transition_length": { "$ref": "defs.json#/$defs/OrcaPercent" },
+    "min_bead_width": { "$ref": "defs.json#/$defs/OrcaPercent" },
+    "min_feature_size": { "$ref": "defs.json#/$defs/OrcaPercent" },
+
+    "line_width": { "$ref": "defs.json#/$defs/OrcaFloat" },
+    "initial_layer_line_width": { "$ref": "defs.json#/$defs/OrcaFloat" },
+    "inner_wall_line_width": { "$ref": "defs.json#/$defs/OrcaFloat" },
+    "outer_wall_line_width": { "$ref": "defs.json#/$defs/OrcaFloat" },
+    "sparse_infill_line_width": { "$ref": "defs.json#/$defs/OrcaFloat" },
+    "internal_solid_infill_line_width": { "$ref": "defs.json#/$defs/OrcaFloat" },
+    "top_surface_line_width": { "$ref": "defs.json#/$defs/OrcaFloat" },
+    "support_line_width": { "$ref": "defs.json#/$defs/OrcaFloat" },
+    
+    "only_one_wall_first_layer": { "$ref": "defs.json#/$defs/OrcaBool" },
+    "only_one_wall_top": { "$ref": "defs.json#/$defs/OrcaBool" },
+    "precise_outer_wall": { "$ref": "defs.json#/$defs/OrcaBool" },
+
+    "bottom_shell_layers": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "bottom_shell_thickness": { "$ref": "defs.json#/$defs/OrcaFloat" },
+    "top_shell_layers": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "top_shell_thickness": { "$ref": "defs.json#/$defs/OrcaFloat" },
+    
+    "bottom_surface_pattern": {
+      "type": "string",
+      "enum": ["monotonic", "monotonic line", "monotonicline", "rectilinear", "concentric", "hilbertcurve", "archimedeanchords", "octagramspiral"]
+    },
+    "top_surface_pattern": {
+      "type": "string",
+      "enum": ["monotonic", "monotonic line", "monotonicline", "rectilinear", "concentric", "hilbertcurve", "archimedeanchords", "octagramspiral"]
+    },
+    "internal_solid_infill_pattern": {
+      "type": "string",
+      "enum": ["monotonic", "rectilinear", "concentric"]
+    },
+    "sparse_infill_pattern": {
+      "type": "string",
+      "enum": ["grid", "lines", "rectilinear", "triangles", "stars", "cubic", "honeycomb", "3dhoneycomb", "gyroid", "alignedrectilinear", "cross", "cross3d", "lightning", "crosshatch", "starlit"]
+    },
+    
+    "sparse_infill_density": { "$ref": "defs.json#/$defs/OrcaPercent" },
+    "infill_combination": { "$ref": "defs.json#/$defs/OrcaBool" },
+    "infill_direction": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "infill_anchor": { "$ref": "defs.json#/$defs/OrcaPercent" },
+    "infill_anchor_max": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "infill_wall_overlap": { "$ref": "defs.json#/$defs/OrcaPercent" },
+    "minimum_sparse_infill_area": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "bottom_solid_infill_flow_ratio": { "$ref": "defs.json#/$defs/OrcaFloat" },
+    "top_solid_infill_flow_ratio": { "$ref": "defs.json#/$defs/OrcaFloat" },
+    "print_flow_ratio": { "$ref": "defs.json#/$defs/OrcaFloat" },
+
+    "ironing_type": {
+      "type": "string",
+      "enum": ["no ironing", "top surfaces", "all solid surfaces"]
+    },
+    "ironing_pattern": {
+      "type": "string",
+      "enum": ["rectilinear", "concentric", "zig-zag"]
+    },
+    "ironing_flow": { "$ref": "defs.json#/$defs/OrcaPercent" },
+    "ironing_spacing": { "$ref": "defs.json#/$defs/OrcaFloat" },
+    "ironing_speed": { "$ref": "defs.json#/$defs/OrcaInt" },
+
+    "fuzzy_skin": {
+      "type": "string",
+      "enum": ["none", "outside", "all"]
+    },
+    "fuzzy_skin_point_distance": { "$ref": "defs.json#/$defs/OrcaFloat" },
+    "fuzzy_skin_thickness": { "$ref": "defs.json#/$defs/OrcaFloat" },
+
+    "enable_support": { "$ref": "defs.json#/$defs/OrcaBool" },
+    "support_type": {
+      "type": "string",
+      "enum": ["normal(auto)", "tree(auto)", "normal(manual)", "tree(manual)"]
+    },
+    "support_style": {
+      "type": "string",
+      "enum": ["default", "snug", "tree_slim", "tree_strong", "tree_hybrid"]
+    },
+    "support_threshold_angle": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "support_angle": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "support_on_build_plate_only": { "$ref": "defs.json#/$defs/OrcaBool" },
+    "support_critical_regions_only": { "$ref": "defs.json#/$defs/OrcaBool" },
+    "support_expansion": { "$ref": "defs.json#/$defs/OrcaFloat" },
+    "support_base_pattern": {
+      "type": "string",
+      "enum": ["rectilinear", "rectilinear grid", "honeycomb", "spacing"]
+    },
+    "support_base_pattern_spacing": { "$ref": "defs.json#/$defs/OrcaFloat" },
+    "support_interface_pattern": {
+      "type": "string",
+      "enum": ["rectilinear", "concentric", "default", "auto"]
+    },
+    "support_interface_spacing": { "$ref": "defs.json#/$defs/OrcaFloat" },
+    "support_interface_top_layers": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "support_interface_bottom_layers": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "support_top_z_distance": { "$ref": "defs.json#/$defs/OrcaFloat" },
+    "support_bottom_z_distance": { "$ref": "defs.json#/$defs/OrcaFloat" },
+    "independent_support_layer_height": { "$ref": "defs.json#/$defs/OrcaBool" },
+    "support_remove_small_overhang": { "$ref": "defs.json#/$defs/OrcaBool" },
+    
+    "tree_support_adaptive_layer_height": { "$ref": "defs.json#/$defs/OrcaBool" },
+    "tree_support_auto_brim": { "$ref": "defs.json#/$defs/OrcaBool" },
+    "tree_support_branch_angle": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "tree_support_branch_diameter": { "$ref": "defs.json#/$defs/OrcaFloat" },
+    "tree_support_branch_distance": { "$ref": "defs.json#/$defs/OrcaFloat" },
+    "tree_support_brim_width": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "tree_support_wall_count": { "$ref": "defs.json#/$defs/OrcaInt" },
+
+    "brim_type": {
+      "type": "string",
+      "enum": ["no_brim", "outer_only", "inner_only", "outer_and_inner"]
+    },
+    "brim_width": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "brim_object_gap": { "$ref": "defs.json#/$defs/OrcaFloat" },
+    "brim_ears_detection_length": { "$ref": "defs.json#/$defs/OrcaFloat" },
+    "brim_ears_max_angle": { "$ref": "defs.json#/$defs/OrcaInt" },
+    
+    "raft_layers": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "raft_contact_distance": { "$ref": "defs.json#/$defs/OrcaFloat" },
+    "raft_expansion": { "$ref": "defs.json#/$defs/OrcaFloat" },
+    "raft_first_layer_expansion": { "$ref": "defs.json#/$defs/OrcaFloat" },
+    "raft_first_layer_density": { "$ref": "defs.json#/$defs/OrcaPercent" },
+
+    "skirt_loops": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "skirt_distance": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "skirt_height": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "skirt_speed": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "draft_shield": {
+      "type": "string",
+      "enum": ["disabled", "enabled"]
+    },
+
+    "default_acceleration": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "initial_layer_acceleration": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "inner_wall_acceleration": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "outer_wall_acceleration": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "top_surface_acceleration": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "travel_acceleration": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "bridge_acceleration": { "$ref": "defs.json#/$defs/OrcaPercent" },
+    "sparse_infill_acceleration": { "$ref": "defs.json#/$defs/OrcaFloatOrPercent" },
+    "internal_solid_infill_acceleration": { "$ref": "defs.json#/$defs/OrcaFloatOrPercent" },
+
+    "default_jerk": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "initial_layer_jerk": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "inner_wall_jerk": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "outer_wall_jerk": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "top_surface_jerk": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "travel_jerk": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "infill_jerk": { "$ref": "defs.json#/$defs/OrcaInt" },
+
+    "initial_layer_speed": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "initial_layer_infill_speed": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "initial_layer_travel_speed": { "$ref": "defs.json#/$defs/OrcaPercent" },
+    "inner_wall_speed": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "outer_wall_speed": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "sparse_infill_speed": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "internal_solid_infill_speed": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "top_surface_speed": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "gap_infill_speed": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "support_speed": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "support_interface_speed": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "bridge_speed": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "internal_bridge_speed": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "travel_speed": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "travel_speed_z": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "role_based_wipe_speed": { "$ref": "defs.json#/$defs/OrcaBool" },
+    "wipe_speed": { "$ref": "defs.json#/$defs/OrcaPercent" },
+    
+    "overhang_1_4_speed": { "$ref": "defs.json#/$defs/OrcaFloatOrPercent" },
+    "overhang_2_4_speed": { "$ref": "defs.json#/$defs/OrcaFloatOrPercent" },
+    "overhang_3_4_speed": { "$ref": "defs.json#/$defs/OrcaFloatOrPercent" },
+    "overhang_4_4_speed": { "$ref": "defs.json#/$defs/OrcaFloatOrPercent" },
+    "enable_overhang_speed": { "$ref": "defs.json#/$defs/OrcaBool" },
+    "overhang_speed_classic": { "$ref": "defs.json#/$defs/OrcaBool" },
+
+    "accel_to_decel_enable": { "$ref": "defs.json#/$defs/OrcaBool" },
+    "accel_to_decel_factor": { "$ref": "defs.json#/$defs/OrcaPercent" },
+
+    "elefant_foot_compensation": { "$ref": "defs.json#/$defs/OrcaFloat" },
+    "xy_contour_compensation": { "$ref": "defs.json#/$defs/OrcaFloat" },
+    "xy_hole_compensation": { "$ref": "defs.json#/$defs/OrcaFloat" },
+    
+    "seam_position": {
+      "type": "string",
+      "enum": ["aligned", "nearest", "random", "rear"]
+    },
+    "seam_gap": { "$ref": "defs.json#/$defs/OrcaFloat" },
+    "staggered_inner_seams": { "$ref": "defs.json#/$defs/OrcaBool" },
+    
+    "gcode_label_objects": { "$ref": "defs.json#/$defs/OrcaBool" },
+    "exclude_object": { "$ref": "defs.json#/$defs/OrcaBool" },
+    "gcode_comments": { "$ref": "defs.json#/$defs/OrcaBool" },
+    "gcode_add_line_number": { "$ref": "defs.json#/$defs/OrcaBool" },
+    
+    "enable_prime_tower": { "$ref": "defs.json#/$defs/OrcaBool" },
+    "prime_tower_width": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "prime_tower_brim_width": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "prime_volume": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "wipe_tower_no_sparse_layers": { "$ref": "defs.json#/$defs/OrcaBool" },
+
+    "ooze_prevention": { "$ref": "defs.json#/$defs/OrcaBool" },
+    "standby_temperature_delta": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "wipe_on_loops": { "$ref": "defs.json#/$defs/OrcaBool" },
+
+    "print_sequence": {
+      "type": "string",
+      "enum": ["by layer", "by object"]
+    },
+    "filename_format": {
+      "type": "string",
+      "description": "Macro-evaluated string defining the output G-code nomenclature."
+    },
+    "post_process": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "required": ["layer_height", "wall_generator", "sparse_infill_density"]
+}

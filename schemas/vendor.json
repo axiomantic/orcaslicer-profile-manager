@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://orcaslicer.schema/vendor.json",
+  "title": "OrcaSlicer Vendor Metadata Manifest Schema",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "The canonical identification string of the vendor ecosystem."
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]{2}\\.[0-9]{2}\\.[0-9]{2}\\.[0-9]{2}$",
+      "description": "Strict four-part semantic versioning requirement."
+    },
+    "force_update": {
+      "$ref": "defs.json#/$defs/OrcaBool"
+    },
+    "description": {
+      "type": "string"
+    },
+    "machine_model_list": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "sub_path": { "type": "string" }
+        },
+        "required": ["name", "sub_path"]
+      }
+    },
+    "machine_list": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "sub_path": { "type": "string" }
+        },
+        "required": ["name", "sub_path"]
+      }
+    },
+    "process_list": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "sub_path": { "type": "string" }
+        },
+        "required": ["name", "sub_path"]
+      }
+    },
+    "filament_list": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "sub_path": { "type": "string" }
+        },
+        "required": ["name", "sub_path"]
+      }
+    }
+  },
+  "required": ["name", "version", "machine_model_list", "machine_list", "process_list"]
+}

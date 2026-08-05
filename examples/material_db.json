@@ -1,0 +1,16 @@
+{
+  "06002": {
+    "base": {
+      "id": "06002",
+      "meterialType": "PLA",
+      "name": "Creality PLA High Speed",
+      "brand": "Creality",
+      "minTemp": 190.0,
+      "maxTemp": 230.0
+    },
+    "kvParam": {
+      "nozzle_temperature": 210.0,
+      "filament_max_volumetric_speed": 18.0
+    }
+  }
+}

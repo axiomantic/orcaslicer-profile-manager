@@ -1,0 +1,20 @@
+{
+  "type": "filament",
+  "name": "Generic PLA @Voron",
+  "setting_id": "GENERICPLAVORON1",
+  "version": "1.9.0.0",
+  "filament_id": "GFL06002",
+  "filament_type": ["PLA"],
+  "compatible_printers": ["Voron 2.4 350 0.4 nozzle"],
+  "filament_density": ["1.24"],
+  "filament_cost": ["20.0"],
+  "filament_flow_ratio": ["0.98"],
+  "fan_min_speed": ["100"],
+  "fan_max_speed": ["100"],
+  "hot_plate_temp": ["60"],
+  "hot_plate_temp_initial_layer": ["65"],
+  "nozzle_temperature": ["215"],
+  "nozzle_temperature_initial_layer": ["220"],
+  "idle_temperature": ["150"],
+  "filament_start_gcode": "; Filament start gcode\n"
+}

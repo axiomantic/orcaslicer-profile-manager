@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://orcaslicer.schema/machine.json",
+  "title": "OrcaSlicer Machine Configuration Schema",
+  "allOf": [
+    { "$ref": "defs.json#/$defs/BaseProfileProperties" }
+  ],
+  "properties": {
+    "type": {
+      "enum": ["machine_model", "machine"]
+    },
+    "printer_model": { "type": "string" },
+    "printer_variant": { "type": "string" },
+    "nozzle_diameter": {
+      "type": "array",
+      "items": { "$ref": "defs.json#/$defs/OrcaFloat" }
+    },
+    "printable_area": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Linear coordinate pairs defining the polygonal build plate geometry."
+    },
+    "printable_height": { "$ref": "defs.json#/$defs/OrcaFloat" },
+    "default_print_profile": { "type": "string" },
+    "bed_model": { "type": "string" },
+    "bed_texture": { "type": "string" },
+    "machine_max_acceleration_x": {
+      "type": "array",
+      "items": { "$ref": "defs.json#/$defs/OrcaInt" }
+    },
+    "machine_max_acceleration_y": {
+      "type": "array",
+      "items": { "$ref": "defs.json#/$defs/OrcaInt" }
+    },
+    "machine_max_acceleration_z": {
+      "type": "array",
+      "items": { "$ref": "defs.json#/$defs/OrcaInt" }
+    },
+    "machine_max_speed_x": {
+      "type": "array",
+      "items": { "$ref": "defs.json#/$defs/OrcaInt" }
+    },
+    "machine_max_speed_y": {
+      "type": "array",
+      "items": { "$ref": "defs.json#/$defs/OrcaInt" }
+    },
+    "machine_max_speed_z": {
+      "type": "array",
+      "items": { "$ref": "defs.json#/$defs/OrcaInt" }
+    },
+    "machine_max_jerk_x": {
+      "type": "array",
+      "items": { "$ref": "defs.json#/$defs/OrcaInt" }
+    },
+    "extruder_colour": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" }
+    },
+    "machine_start_gcode": { "type": "string" },
+    "machine_end_gcode": { "type": "string" },
+    "before_layer_change_gcode": { "type": "string" },
+    "layer_change_gcode": { "type": "string" },
+    "use_relative_e_distances": { "$ref": "defs.json#/$defs/OrcaBool" },
+    "use_firmware_retraction": { "$ref": "defs.json#/$defs/OrcaBool" },
+    
+    "is_imex": { 
+      "$ref": "defs.json#/$defs/OrcaBool",
+      "description": "Toggles activation of the Independent Multi-Extruder logic block."
+    },
+    "imex_gantry_count": { 
+      "$ref": "defs.json#/$defs/OrcaInt"
+    },
+    "imex_firmware_managed_zones": { 
+      "$ref": "defs.json#/$defs/OrcaBool",
+      "description": "Delegates IDEX/IQEX mirroring/duplication math entirely to the mainboard firmware."
+    },
+    
+    "printer_power_consumption": { 
+      "$ref": "defs.json#/$defs/OrcaFloat",
+      "description": "Baseline power draw in Watts utilized for per-print fiscal calculation."
+    },
+    "electricity_rate": { "$ref": "defs.json#/$defs/OrcaFloat" },
+    "night_electricity_rate": { "$ref": "defs.json#/$defs/OrcaFloat" },
+    "night_rate_start_hour": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "night_rate_end_hour": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "printer_purchase_price": { "$ref": "defs.json#/$defs/OrcaFloat" },
+    "printer_expected_lifetime": { "$ref": "defs.json#/$defs/OrcaInt" },
+    "maintenance_cost_per_hour": { "$ref": "defs.json#/$defs/OrcaFloat" },
+    "fixed_cost_per_print": { "$ref": "defs.json#/$defs/OrcaFloat" },
+    "estimated_failure_rate": { "$ref": "defs.json#/$defs/OrcaPercent" },
+    "profit_margin": { "$ref": "defs.json#/$defs/OrcaPercent" },
+    "tax_vat": { "$ref": "defs.json#/$defs/OrcaPercent" }
+  },
+  "required": ["printer_model", "printable_area"]
+}

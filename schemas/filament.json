@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://orcaslicer.schema/filament.json",
+  "title": "OrcaSlicer Filament Topology Schema",
+  "allOf": [
+    { "$ref": "defs.json#/$defs/BaseProfileProperties" }
+  ],
+  "properties": {
+    "type": {
+      "const": "filament"
+    },
+    "filament_id": {
+      "type": "string",
+      "maxLength": 8,
+      "description": "Internal namespace identifier. A strict 8-character hardware limit is enforced for AMS integration."
+    },
+    "filament_type": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "compatible_printers": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "filament_density": { "$ref": "defs.json#/$defs/OrcaExtruderArray" },
+    "filament_cost": { "$ref": "defs.json#/$defs/OrcaExtruderArray" },
+    "filament_flow_ratio": { "$ref": "defs.json#/$defs/OrcaExtruderArray" },
+    "fan_cooling_layer_time": { "$ref": "defs.json#/$defs/OrcaExtruderArray" },
+    "fan_min_speed": { "$ref": "defs.json#/$defs/OrcaExtruderArray" },
+    "fan_max_speed": { "$ref": "defs.json#/$defs/OrcaExtruderArray" },
+    "filament_long_retractions_when_cut": { "$ref": "defs.json#/$defs/OrcaExtruderArray" },
+    "filament_extruder_variant": { "$ref": "defs.json#/$defs/OrcaExtruderArray" },
+    "filament_pre_cooling_temperature": { "$ref": "defs.json#/$defs/OrcaExtruderArray" },
+    "filament_ramming_travel_time": { "$ref": "defs.json#/$defs/OrcaExtruderArray" },
+    "filament_adaptive_volumetric_speed": { "$ref": "defs.json#/$defs/OrcaExtruderArray" },
+    "hot_plate_temp": { "$ref": "defs.json#/$defs/OrcaExtruderArray" },
+    "hot_plate_temp_initial_layer": { "$ref": "defs.json#/$defs/OrcaExtruderArray" },
+    "nozzle_temperature": { "$ref": "defs.json#/$defs/OrcaExtruderArray" },
+    "nozzle_temperature_initial_layer": { "$ref": "defs.json#/$defs/OrcaExtruderArray" },
+    "idle_temperature": { "$ref": "defs.json#/$defs/OrcaExtruderArray" },
+    "filament_start_gcode": { "$ref": "defs.json#/$defs/OrcaExtruderArray" },
+    "filament_end_gcode": { "$ref": "defs.json#/$defs/OrcaExtruderArray" }
+  },
+  "required": ["filament_type", "filament_flow_ratio"]
+}
