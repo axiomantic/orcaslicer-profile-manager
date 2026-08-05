@@ -80,3 +80,7 @@ Symlink rather than copy — the script resolves its `schemas/` directory throug
 [SKILL.md](skills/orcaslicer-profile-manager/SKILL.md) is the reference: the user-preset format, the serialization gotchas that are documented nowhere upstream, and the pre-generation interview.
 
 Tests: `python -m unittest discover -s tests`
+
+## License
+
+[MIT](LICENSE)
