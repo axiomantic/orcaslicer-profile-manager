@@ -125,7 +125,7 @@
     "support_expansion": { "$ref": "defs.json#/$defs/OrcaFloat" },
     "support_base_pattern": {
       "type": "string",
-      "enum": ["rectilinear", "rectilinear grid", "honeycomb", "spacing"]
+      "enum": ["default", "rectilinear", "rectilinear grid", "honeycomb", "spacing"]
     },
     "support_base_pattern_spacing": { "$ref": "defs.json#/$defs/OrcaFloat" },
     "support_interface_pattern": {

@@ -2,25 +2,53 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://orcaslicer.schema/defs.json",
   "$defs": {
-    "OrcaBool": {
+    "OrcaBoolScalar": {
       "description": "Represents a C++ bool serialized as binary string or boolean string.",
       "type": "string",
       "pattern": "^(0|1|true|false)$"
     },
-    "OrcaInt": {
+    "OrcaBool": {
+      "description": "A C++ bool. Multi-extruder printers serialize this as one value per extruder, so a bare scalar or an array of scalars are both valid.",
+      "anyOf": [
+        { "$ref": "#/$defs/OrcaBoolScalar" },
+        { "type": "array", "items": { "$ref": "#/$defs/OrcaBoolScalar" } }
+      ]
+    },
+    "OrcaIntScalar": {
       "description": "Represents a C++ integer serialized as a string.",
       "type": "string",
       "pattern": "^[-+]?[0-9]+$"
     },
-    "OrcaFloat": {
+    "OrcaInt": {
+      "description": "A C++ integer. Multi-extruder printers serialize this as one value per extruder, so a bare scalar or an array of scalars are both valid.",
+      "anyOf": [
+        { "$ref": "#/$defs/OrcaIntScalar" },
+        { "type": "array", "items": { "$ref": "#/$defs/OrcaIntScalar" } }
+      ]
+    },
+    "OrcaFloatScalar": {
       "description": "Represents a C++ double/float serialized as a string.",
       "type": "string",
       "pattern": "^[-+]?[0-9]*\\.?[0-9]+([eE][-+]?[0-9]+)?$"
     },
-    "OrcaPercent": {
+    "OrcaFloat": {
+      "description": "A C++ double/float. Multi-extruder printers serialize this as one value per extruder, so a bare scalar or an array of scalars are both valid.",
+      "anyOf": [
+        { "$ref": "#/$defs/OrcaFloatScalar" },
+        { "type": "array", "items": { "$ref": "#/$defs/OrcaFloatScalar" } }
+      ]
+    },
+    "OrcaPercentScalar": {
       "description": "A percentage value used for dynamic scalar calculations.",
       "type": "string",
       "pattern": "^[-+]?[0-9]*\\.?[0-9]+%$"
+    },
+    "OrcaPercent": {
+      "description": "A percentage value. Multi-extruder printers serialize this as one value per extruder, so a bare scalar or an array of scalars are both valid.",
+      "anyOf": [
+        { "$ref": "#/$defs/OrcaPercentScalar" },
+        { "type": "array", "items": { "$ref": "#/$defs/OrcaPercentScalar" } }
+      ]
     },
     "OrcaFloatOrPercent": {
       "description": "A polymorphic type accepting either a static float or a relative percentage.",
@@ -58,16 +86,17 @@
         "inherits": { "type": "string" },
         "from": { "type": "string" },
         "instantiation": { "$ref": "#/$defs/OrcaBool" },
-        "setting_id": { 
+        "setting_id": {
+          "description": "16-char base62 for cloned/user profiles, but OrcaSlicer's own system bundles also use short legacy codes (e.g. 'GP004'), so the pattern only checks charset, not length.",
           "type": "string",
-          "pattern": "^[a-zA-Z0-9]{16}$"
+          "pattern": "^[a-zA-Z0-9]{1,32}$"
         },
         "version": {
           "type": "string",
           "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$"
         }
       },
-      "required": ["type", "name"]
+      "required": ["name"]
     }
   }
 }

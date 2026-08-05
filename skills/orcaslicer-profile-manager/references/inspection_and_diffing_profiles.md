@@ -6,8 +6,8 @@ This reference guide details how to use `list-vendors`, `list-profiles`, `inspec
 
 Use `list-vendors` to discover all installed 3D printer hardware manufacturer ecosystems on the system:
 ```bash
-python scripts/validate_orca.py list-vendors
-python scripts/validate_orca.py list-vendors --json
+python validate_orca.py list-vendors
+python validate_orca.py list-vendors --json
 ```
 
 *Summary Details Provided*:
@@ -23,19 +23,19 @@ python scripts/validate_orca.py list-vendors --json
 Search installed built-in and user profiles with rich filtering:
 ```bash
 # Filter by domain
-python scripts/validate_orca.py list-profiles --domain filament
+python validate_orca.py list-profiles --domain filament
 
 # Filter by vendor
-python scripts/validate_orca.py list-profiles --vendor Creality
+python validate_orca.py list-profiles --vendor Creality
 
 # Filter by search query
-python scripts/validate_orca.py list-profiles --query "PLA Basic"
+python validate_orca.py list-profiles --query "PLA Basic"
 
 # Detailed output showing setting_id and inherits
-python scripts/validate_orca.py list-profiles --domain process --detail
+python validate_orca.py list-profiles --domain process --detail
 
 # Programmatic JSON format
-python scripts/validate_orca.py list-profiles --domain machine --json
+python validate_orca.py list-profiles --domain machine --json
 ```
 
 ---
@@ -45,13 +45,13 @@ python scripts/validate_orca.py list-profiles --domain machine --json
 Use `inspect` to analyze any profile (by name or file path) and generate a diagnostic report:
 ```bash
 # Inspect built-in profile by name
-python scripts/validate_orca.py inspect "Bambu PLA Basic @BBL X1C"
+python validate_orca.py inspect "Bambu PLA Basic @BBL X1C"
 
 # Inspect custom profile by file path
-python scripts/validate_orca.py inspect ./custom_process.json
+python validate_orca.py inspect ./custom_process.json
 
 # Programmatic JSON report for LLM workflows
-python scripts/validate_orca.py inspect ./custom_filament.json --json
+python validate_orca.py inspect ./custom_filament.json --json
 ```
 
 ### Inspection Report Sections
@@ -69,16 +69,16 @@ python scripts/validate_orca.py inspect ./custom_filament.json --json
 Use `diff` to compare two profiles and highlight exact parameter value deltas:
 ```bash
 # Compare two built-in or custom profiles by name
-python scripts/validate_orca.py diff "0.20mm Standard @Voron" "0.20mm HighSpeed Voron"
+python validate_orca.py diff "0.20mm Standard @Voron" "0.20mm HighSpeed Voron"
 
 # Compare two profile JSON files
-python scripts/validate_orca.py diff ./profileA.json ./profileB.json
+python validate_orca.py diff ./profileA.json ./profileB.json
 
 # Compare raw unmerged JSON without resolving inheritance
-python scripts/validate_orca.py diff ./profileA.json ./profileB.json --no-resolve-inherits
+python validate_orca.py diff ./profileA.json ./profileB.json --no-resolve-inherits
 
 # Programmatic JSON format
-python scripts/validate_orca.py diff ./profileA.json ./profileB.json --json
+python validate_orca.py diff ./profileA.json ./profileB.json --json
 ```
 
 ### Output Categories

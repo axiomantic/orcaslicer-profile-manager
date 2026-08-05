@@ -64,6 +64,49 @@ SCHEMA_MAPPING = {
     "material-db": "material_database.json"
 }
 
+# OrcaSlicer's *user* preset JSON format is a strict subset of the *system* preset
+# format. System bundle profiles are full, self-contained definitions and carry
+# "type", "setting_id", and "compatible_printers". A **user** preset that carries
+# any of these fields is silently rejected/ignored by OrcaSlicer's preset loader
+# (undocumented; see https://github.com/OrcaSlicer/OrcaSlicer/issues/12223).
+# User presets must instead: omit "type"/"setting_id"/"compatible_printers"/
+# "instantiation" entirely, always declare a non-empty "inherits" pointing at an
+# existing (system or user) profile, and set the domain-specific "*_settings_id"
+# identity field to match "name".
+USER_PRESET_FORBIDDEN_KEYS = ("type", "setting_id", "instantiation")
+
+DOMAIN_SETTINGS_ID_KEY = {
+    "process": "print_settings_id",
+    "filament": "filament_settings_id",
+    "machine": "printer_settings_id",
+}
+
+
+def lint_user_preset(profile_data: Dict[str, Any], domain: str) -> List[str]:
+    """Checks a profile dict against OrcaSlicer's undocumented user-preset format rules.
+    Returns a list of human-readable violations; empty list means the preset is safe to write.
+    Note: "compatible_printers" is intentionally not flagged here — clone() always strips it
+    from the cloned source first, so if it's present at lint time the caller added it on purpose
+    (--compatible-printers or --set compatible_printers=...)."""
+    violations = []
+    for key in USER_PRESET_FORBIDDEN_KEYS:
+        if key in profile_data:
+            violations.append(
+                f"'{key}' is a system-preset-only field. OrcaSlicer silently rejects user "
+                f"presets that carry it; remove it."
+            )
+    if not profile_data.get("inherits"):
+        violations.append(
+            "'inherits' is missing/empty. OrcaSlicer requires every user process/filament/machine "
+            "preset to inherit from an existing profile; a standalone preset with no inherits is rejected."
+        )
+    if profile_data.get("from") != "User":
+        violations.append("'from' must be set to \"User\" for a user preset.")
+    settings_id_key = DOMAIN_SETTINGS_ID_KEY.get(domain)
+    if settings_id_key and not profile_data.get(settings_id_key):
+        violations.append(f"'{settings_id_key}' is missing/empty; it should match 'name'.")
+    return violations
+
 SKELETON_TEMPLATES = {
     "vendor": {
         "name": "CustomVendor",
@@ -423,6 +466,14 @@ class OrcaValidator:
         if "layer_height" in data or "wall_generator" in data:
             return "process"
 
+        # A minimal-diff *user* preset (correctly!) carries none of the probe keys
+        # above — it only has identity fields plus whatever few keys were overridden.
+        # Its domain-specific "*_settings_id" field is the one thing that's always
+        # present and unambiguous, so fall back to it before giving up.
+        for domain, settings_id_key in DOMAIN_SETTINGS_ID_KEY.items():
+            if settings_id_key in data:
+                return domain
+
         return None
 
     def validate_data(self, data: Any, expected_domain: str, resolve_inherits: bool = True) -> Tuple[bool, List[str], List[str]]:
@@ -492,6 +543,18 @@ class OrcaValidator:
         result["valid"] = valid
         result["errors"] = errors
         result["warnings"] = warnings
+
+        # A profile living under a "user/" directory (or explicitly tagged from:"User")
+        # is subject to OrcaSlicer's stricter, undocumented user-preset format — flag
+        # violations as warnings here even when the file is otherwise schema-valid, since
+        # schema validity does NOT guarantee OrcaSlicer's preset loader will show the profile.
+        looks_like_user_preset = isinstance(data, dict) and (
+            data.get("from") == "User" or "user" in {p.lower() for p in file_path.parts}
+        )
+        if looks_like_user_preset and target_domain in DOMAIN_SETTINGS_ID_KEY and isinstance(data, dict):
+            for lint_msg in lint_user_preset(data, target_domain):
+                warnings.append(f"[user-preset format] {lint_msg}")
+
         return result
 
 
@@ -1056,19 +1119,39 @@ def main():
         for d in search_dirs:
             resolver.scan_directory(d)
 
+        # OrcaSlicer user presets are always a *diff* against a named parent that must
+        # still exist (see USER_PRESET_FORBIDDEN_KEYS comment above) — a fully
+        # standalone preset with no "inherits" is rejected by the loader. So both
+        # modes below set "inherits" to the profile actually being cloned (never a
+        # grandparent), and differ only in how much of its resolved body gets
+        # explicitly redeclared in the child:
+        #   - normal clone : empty diff: only the explicit --set overrides. Future
+        #     edits to the parent chain continue to flow through, same as a GUI
+        #     "Save As" of a modified preset.
+        #   - --de-link-inherits : every resolved key is redeclared in the child, so
+        #     the child's values can never drift when the parent chain is updated.
+        #     Full independence isn't possible in OrcaSlicer's preset system (the
+        #     "inherits" link itself must stay valid), so this only protects values,
+        #     not the link target.
+        parent_name = raw_source.get("name") or args.target
+
         if args.de_link_inherits:
             print("De-linking profile inheritance (flattening parent chain for independence)...")
             profile_data, _ = resolver.resolve(raw_source)
-            profile_data.pop("inherits", None)
-            profile_data.pop("from", None)
         else:
-            profile_data = dict(raw_source)
-            if args.inherits:
-                profile_data["inherits"] = args.inherits
+            profile_data = {}
 
+        profile_data["inherits"] = args.inherits if args.inherits else parent_name
         profile_data["name"] = args.name
-        profile_data["setting_id"] = generate_setting_id()
         profile_data["from"] = "User"
+
+        settings_id_key = DOMAIN_SETTINGS_ID_KEY.get(args.domain)
+        if settings_id_key:
+            profile_data[settings_id_key] = args.name
+
+        for forbidden_key in USER_PRESET_FORBIDDEN_KEYS:
+            profile_data.pop(forbidden_key, None)
+        profile_data.pop("compatible_printers", None)
 
         if args.compatible_printers:
             profile_data["compatible_printers"] = args.compatible_printers
@@ -1084,6 +1167,15 @@ def main():
                 except Exception:
                     parsed_val = v
                 profile_data[k] = parsed_val
+
+        lint_violations = lint_user_preset(profile_data, args.domain)
+        if lint_violations:
+            print(colorize("Cloned profile violates OrcaSlicer's user-preset format rules:", Colors.FAIL), file=sys.stderr)
+            for v in lint_violations:
+                print(f"  ERROR: {v}", file=sys.stderr)
+            sys.exit(1)
+
+        cloned_setting_id = generate_setting_id()
 
         if args.out:
             out_path = Path(args.out).resolve()
@@ -1124,11 +1216,11 @@ def main():
 
         info_path = out_path.with_suffix(".info")
         with open(info_path, "w", encoding="utf-8") as info_f:
-            info_f.write(f"sync_info = create\nuser_id = \nsetting_id = \nbase_id = {profile_data['setting_id']}\nupdated_time = 0\n")
+            info_f.write(f"sync_info = create\nuser_id = \nsetting_id = \nbase_id = {cloned_setting_id}\nupdated_time = 0\n")
 
         print(colorize(f"Successfully cloned profile to {out_path}", Colors.OKGREEN))
         print(f"  - Name: {args.name}")
-        print(f"  - Setting ID: {profile_data['setting_id']}")
+        print(f"  - Setting ID (in .info): {cloned_setting_id}")
         if args.de_link_inherits:
             print("  - Inheritance: Independent (De-linked from stock parent)")
         elif profile_data.get("inherits"):

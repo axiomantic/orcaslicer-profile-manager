@@ -2,6 +2,15 @@
 
 When generating new OrcaSlicer profiles, adhere strictly to domain-specific required properties and value types.
 
+> [!NOTE]
+> The rules below (including `type` as required) describe **system-preset** shape —
+> use `template` for building a vendor bundle or a from-scratch reference file. If
+> the output is meant to be dropped directly into a `user/default/<domain>/`
+> folder as a *user* preset, it must NOT carry `type`/`setting_id`/
+> `compatible_printers` and MUST carry a non-empty `inherits`. Prefer `clone`
+> (which does this automatically) over hand-writing a user preset from a
+> template. See SKILL.md § "User Presets vs System Presets".
+
 ## 1. Vendor Manifest Profiles (`vendor.json`)
 Located in `resources/profiles/<VendorName>.json`.
 - **Required Fields**: `name`, `version` (4-part format `XX.XX.XX.XX`), `machine_model_list`, `machine_list`, `process_list`.
