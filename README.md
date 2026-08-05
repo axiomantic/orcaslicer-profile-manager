@@ -59,7 +59,7 @@ Worked, copy-pasteable setups in [references/recipes.md](skills/orcaslicer-profi
 
 ## What it does
 
-- **`doctor`** — reads OrcaSlicer's log and reports dropped presets, stripped keys, and a files-on-disk vs presets-loaded checksum. Exits non-zero, so it works as a gate.
+- **`doctor`** — reads OrcaSlicer's log and reports dropped presets, a files-on-disk vs presets-loaded checksum, and any stripped keys the log names (2.4.2 does not log key removal for user presets, so use known-key validation for that). Exits non-zero, so it works as a gate.
 - **Known-key validation** — every setting checked against option tables extracted from the OrcaSlicer binary. Catches typos and wrong-domain keys, which OrcaSlicer ignores in silence.
 - **User-preset format enforcement** — the undocumented rules that decide whether a preset appears at all: no `type`/`setting_id`, a system parent, `from: "User"`, a `version`.
 - **Preflight checks** — aborts when OrcaSlicer is running, when a parent does not exist, or when the parent does not support the printer you are binding to.

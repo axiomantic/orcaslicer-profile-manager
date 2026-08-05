@@ -285,6 +285,27 @@ A multi-material job needs AMS slot indices. `support_interface_filament` and
 own slot layout. Only the operator knows it. Ask for the slot numbers, or leave
 the keys at `"0"` (auto) and tell the operator to set them in the UI.
 
+> [!CAUTION]
+> **After you generate a multi-material or support-interface preset set, report the
+> required manual steps to the operator.** State plainly that **the presets alone are
+> not a complete working setup**. Give this checklist:
+>
+> 1. **Flushing volumes (mandatory).** Set 600 to 800 mm³ for a PLA/PETG pair in the
+>    **Flushing volumes** dialog. The keys are not preset options; they live in
+>    `OrcaSlicer.conf` per printer preset. Too little purge gives
+>    cross-contamination and a clogged nozzle.
+> 2. **Support interface filament (mandatory).** Set **Support interface filament**
+>    in the **Support** tab to the AMS slot that holds the interface material. Leave
+>    **Support filament** at `0`.
+> 3. **Verify the physical AMS slots** against the indices from step 2.
+> 4. **Optional:** `flush_into_infill`, `flush_into_objects`, and
+>    `flush_into_support` reuse the purged filament.
+>
+> Report the checklist even when the operator did not ask for it, and even when
+> every preset validates clean. See [Recipes](references/recipes.md) § "Required
+> manual steps after you create these presets" for the full text.
+> `validate_orca.py clone` prints the same checklist at creation time.
+
 ### 6. Confirm that the parent profile exists and is a system preset
 
 A hallucinated parent name is a real observed failure. `Generic PETG @BBL X1C`
@@ -417,6 +438,11 @@ the log to find out what OrcaSlicer actually loaded:
 ```bash
 python validate_orca.py doctor
 ```
+`doctor` sees a dropped preset and a files-vs-loaded count mismatch. It does not
+see a bad key in a user preset: OrcaSlicer 2.4.2 does not log key removal on that
+load path, so `doctor` reports the key check as NOT CHECKED. Use the known-key
+validation in `clone` and `auto` against a typo or a wrong-domain key.
+
 See [Finding & Cloning Built-in Profiles](references/finding_and_cloning_builtin_profiles.md) § 5.
 
 ---
@@ -435,7 +461,7 @@ See [Finding & Cloning Built-in Profiles](references/finding_and_cloning_builtin
 | `clone` | Copy profile, assign new 16-char `setting_id`, de-link, & validate | N/A |
 | `template` | Output starter skeleton JSON | stdout / `--out` |
 | `auto` | Auto-detect domain & validate against JSON schema | `--json` |
-| `doctor` | Read the newest OrcaSlicer log; report dropped presets, removed keys, and file-count mismatches | `--json` |
+| `doctor` | Read the newest OrcaSlicer log; report dropped presets and file-count mismatches (removed keys only when the log names them; 2.4.2 does not log them for user presets) | `--json` |
 
 ---
 

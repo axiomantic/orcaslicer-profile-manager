@@ -280,6 +280,74 @@ def lint_unknown_keys(profile_data: Dict[str, Any], domain: str) -> List[str]:
     return violations
 
 
+# Some settings a multi-material / support-interface setup REQUIRES cannot be written
+# into any preset at all. Flushing volumes are not preset data (they live in
+# OrcaSlicer.conf, per printer, sized by the whole filament set on the plate), and the
+# support-interface filament index depends on the operator's physical AMS slot layout,
+# which no generated preset can know. A preset set that looks complete and validates
+# clean therefore still does not print correctly. The notice below fires at creation
+# time so the operator learns this whether or not the agent read the recipe.
+def clone_implies_manual_steps(profile_data: Dict[str, Any], domain: str) -> bool:
+    """True when the written preset implies a multi-material or support-interface
+    setup, i.e. one whose remaining configuration steps are UI-only."""
+    if not isinstance(profile_data, dict):
+        return False
+
+    def first_value(key: str) -> Optional[str]:
+        # Filament keys are arrays of strings; process keys are bare strings.
+        raw = profile_data.get(key)
+        if isinstance(raw, list):
+            raw = raw[0] if raw else None
+        if raw is None:
+            return None
+        return str(raw).strip()
+
+    if domain == "filament":
+        return first_value("filament_is_support") in ("1", "true", "True")
+
+    if domain == "process":
+        for key in ("support_interface_filament", "support_filament"):
+            val = first_value(key)
+            if val is not None and val != "0":
+                return True
+        # Zero gap between support and model is the mutual-support signature: it only
+        # works because the two materials do not bond, which means two materials.
+        for key in ("support_top_z_distance", "support_bottom_z_distance"):
+            if first_value(key) == "0":
+                return True
+
+    return False
+
+
+def print_manual_steps_notice(no_color: bool = False) -> None:
+    """Prints the UI-only steps that no preset can express. Informational only: it
+    never changes the exit code."""
+    rule = "=" * 78
+    print()
+    print(colorize(rule, Colors.WARNING, no_color))
+    print(colorize("REQUIRED MANUAL STEPS - THE PRESETS ALONE ARE NOT A WORKING SETUP",
+                   Colors.WARNING + Colors.BOLD, no_color))
+    print(colorize(rule, Colors.WARNING, no_color))
+    print("This preset implies a multi-material or support-interface setup. Two settings")
+    print("it needs cannot be written into any preset. Do these in the OrcaSlicer UI:")
+    print()
+    print(colorize("  1. Flushing volumes (MANDATORY)", Colors.BOLD, no_color))
+    print("     Open the Flushing volumes dialog and set 600 to 800 mm3 for a PLA/PETG")
+    print("     pair. Too little purge gives cross-contamination and nozzle clogs.")
+    print(colorize("  2. Support interface filament (MANDATORY)", Colors.BOLD, no_color))
+    print("     In the Support tab set 'Support interface filament' to the AMS slot that")
+    print("     holds the interface material. Leave 'Support filament' at 0 (auto) so the")
+    print("     support body uses the model filament.")
+    print(colorize("  3. Verify the physical AMS slots", Colors.BOLD, no_color))
+    print("     The slots must hold the materials the indices in step 2 name.")
+    print(colorize("  4. Optional: waste reduction", Colors.BOLD, no_color))
+    print("     flush_into_infill, flush_into_objects, and flush_into_support reuse the")
+    print("     purged filament. flush_into_support suits a mutual-support print.")
+    print()
+    print("Full procedure: references/recipes.md, Recipe 2 (PLA/PETG Mutual Support).")
+    print(colorize(rule, Colors.WARNING, no_color))
+
+
 # OrcaSlicer rewrites its whole preset state to disk when it exits, so a preset file
 # written while the app is open is overwritten/discarded on quit — the operator sees
 # no error anywhere, just a preset that never appears. Detection is best-effort: a
@@ -614,6 +682,17 @@ _LOADED_RE = re.compile(r'loaded (?P<count>\d+) presets? from "(?P<dir>[^"]+)"\s
 
 # Emitted by Preset::remove_invalid_keys -- the runtime counterpart of this tool's
 # static known-key check. Whatever OrcaSlicer removed here really was rejected.
+#
+# LIMITATION, established empirically against OrcaSlicer 2.4.2: this line is never
+# emitted for presets loaded from the user preset DIRECTORY. A probe preset that
+# carried a pure-junk key (zz_not_a_real_setting) and a wrong-domain key
+# (layer_height, a process key, in a filament preset) loaded successfully, the
+# loaded-count matched the file count, and no "incorrect keys" line appeared --
+# although the format string does exist in the binary and [warning] lines are
+# captured in that same log file. remove_invalid_keys evidently runs (or logs) only
+# on other paths, such as a project/3mf load or import_json_presets. So the ABSENCE
+# of these lines proves nothing about a user preset. The parser stays because those
+# other paths, and future OrcaSlicer versions, do emit them.
 _INCORRECT_KEYS_RE = re.compile(
     r"contains the following incorrect keys:\s*(?P<keys>.+?)\s*,?\s*which (?:were|was) removed",
     re.IGNORECASE,
@@ -801,6 +880,11 @@ def run_doctor(log_path: Path, user_dir: Optional[Path]) -> Dict[str, Any]:
         ),
         "dropped": parsed["dropped"],
         "removed_keys": parsed["removed_keys"],
+        # Distinguishes "the log reported no removals" from "this check cannot see
+        # removals here". An empty removed_keys list alone cannot say which it is.
+        # See the LIMITATION note on _INCORRECT_KEYS_RE.
+        "removed_keys_check": "removals-found" if parsed["removed_keys"] else "not-capable",
+        "removed_keys_check_detects_user_preset_loads": bool(parsed["removed_keys"]),
         "known_key_drift": detect_known_key_drift(parsed["removed_keys"], preset_domains),
         "known_keys_version": KNOWN_KEYS["version"] if KNOWN_KEYS else None,
         "counts": counts,
@@ -833,7 +917,12 @@ def print_doctor_report(report: Dict[str, Any], no_color: bool = False) -> None:
 
     print(colorize(f"Keys removed by OrcaSlicer ({len(report['removed_keys'])})", Colors.BOLD, no_color))
     if not report["removed_keys"]:
-        print(f"  [{colorize('OK', Colors.OKGREEN, no_color)}] no preset had keys stripped at load time.")
+        tag = colorize("NOT CHECKED", Colors.WARNING, no_color)
+        print(f"  [{tag}] the log holds no key-removal line, but OrcaSlicer 2.4.2")
+        print("                does not log key removal for a user preset directory load. This is")
+        print("                no evidence that the preset keys are valid. Static validation is the")
+        print("                defence: `clone` rejects an unknown or wrong-domain --set key, and")
+        print("                `auto` reports an [unknown key] warning.")
     for entry in report["removed_keys"]:
         tag = colorize("REMOVED", Colors.WARNING, no_color)
         print(f"  [{tag}] {entry['preset']}: {', '.join(entry['keys'])}")
@@ -1986,6 +2075,10 @@ def main():
             print("  - Inheritance: Independent (De-linked from stock parent)")
         elif profile_data.get("inherits"):
             print(f"  - Inherits: {profile_data['inherits']}")
+
+        if clone_implies_manual_steps(profile_data, args.domain):
+            # The clone subparser declares no --no-color of its own.
+            print_manual_steps_notice(getattr(args, "no_color", False))
         sys.exit(0)
 
     # Validation Subcommands (vendor, machine, filament, process, material-db, auto)

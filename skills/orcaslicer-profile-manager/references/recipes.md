@@ -4,6 +4,11 @@ Copy-pasteable recipes for common OrcaSlicer tuning tasks. Each recipe gives the
 exact key names, the value, and the reason for the value. Each recipe also lists
 what a preset cannot do.
 
+> [!CAUTION]
+> **Recipe 2 (PLA / PETG mutual support) has mandatory manual steps.** The presets
+> alone do not give a working setup. Read § "Required manual steps after you
+> create these presets" before you generate anything for that recipe.
+
 > [!IMPORTANT]
 > Classify every key by domain before you write it. A process key in a filament
 > preset is silently ignored. A filament key in a process preset is silently
@@ -198,6 +203,45 @@ be applied to every file that holds it. There is no single place to edit it.
 > Never name a preset `Base`. The word is ambiguous. See § "Naming: do not use
 > the word Base" below.
 
+### Required manual steps after you create these presets
+
+> [!WARNING]
+> **The presets alone do not give a working setup.** Two settings that this recipe
+> needs cannot be written into any preset. The operator must set them in the
+> OrcaSlicer UI. Steps 1 and 2 below are **mandatory**. A print that starts without
+> them gives cross-contamination, a clogged nozzle, or a support interface made of
+> the wrong material.
+>
+> Report this checklist to the operator immediately after you write the presets.
+
+1. **Set the flushing volumes. (Mandatory.)**
+   Open the **Flushing volumes** dialog. For a PLA/PETG pair set **600 to 800 mm³**
+   per change. The keys `flush_volumes_matrix`, `flush_volumes_vector`, and
+   `flush_multiplier` are not preset options. They live in `OrcaSlicer.conf`, per
+   printer preset, as pipe-delimited float strings, and their size depends on the
+   whole filament set that is loaded on the plate. The flush is also the main
+   defence against cross-contamination and a clogged nozzle when two materials with
+   different temperatures share one nozzle. Too little purge is a print failure, not
+   a cosmetic fault.
+2. **Assign the support interface filament. (Mandatory.)**
+   In the **Support** tab set **Support interface filament** to the AMS slot that
+   holds the interface material. Leave **Support filament** at `0` so the support
+   body uses the model filament. `support_interface_filament` and `support_filament`
+   are process-domain int strings that hold an AMS slot / extruder **index**, and
+   `"0"` means auto. The correct index depends on the operator's own slot layout, so
+   a generated preset cannot know it.
+3. **Verify the physical AMS slots.**
+   Confirm that each slot holds the material that the index from step 2 names. A
+   correct index against a wrong spool prints the interface in the wrong material.
+4. **Optional: lower the waste.**
+   The process-domain keys `flush_into_infill`, `flush_into_objects`, and
+   `flush_into_support` reuse the purged filament instead of discarding it. At 600
+   to 800 mm³ per change this saves a large amount of material.
+   `flush_into_support` suits a mutual-support print especially well.
+
+`validate_orca.py clone` prints the same checklist when the preset it writes implies
+a multi-material or support-interface setup.
+
 ### There is no support-body filament preset
 
 The support **body** does not touch the model. Only the support **interface**
@@ -324,6 +368,9 @@ A value of `"0"` means the filament does not support that plate.
 > the only support flag in the filament domain.
 
 ### What you cannot do in a preset (Recipe 2)
+
+The first two items are the mandatory manual steps. See § "Required manual steps
+after you create these presets" for the operator checklist.
 
 > [!WARNING]
 > **Flushing volumes are not preset data.** The keys `flush_volumes_matrix`,

@@ -87,9 +87,12 @@ python validate_orca.py clone process "0.20mm Standard @Voron" \
 ### 5.1 Step 1: run `doctor`
 
 The tool automates every manual step in section 5.2. It reads the newest log
-file, reports the presets that OrcaSlicer dropped, reports the keys that
-OrcaSlicer removed, cross-checks the number of JSON files against the number of
-loaded presets, and exits non-zero when anything is wrong.
+file, reports the presets that OrcaSlicer dropped, cross-checks the number of
+JSON files against the number of loaded presets, and exits non-zero when anything
+is wrong. It also reports the keys that OrcaSlicer removed, but only when the log
+names them; OrcaSlicer 2.4.2 does not log a key removal for a user preset
+directory load, so `doctor` reports that check as `NOT CHECKED`. See the warning
+in section 5.2.
 
 ```bash
 python validate_orca.py doctor
@@ -143,13 +146,28 @@ Search the newest log file for these strings:
 |---|---|
 | `can not find parent` | OrcaSlicer could not resolve `inherits`. It dropped the preset. |
 | `can not find inherit preset for user preset` | Same failure, reported for a user preset. |
-| `incorrect keys` | OrcaSlicer removed one or more keys because it does not know them. The preset loaded, but those settings do nothing. |
+| `incorrect keys` | OrcaSlicer removed one or more keys because it does not know them. The preset loaded, but those settings do nothing. **Read the warning below: this line does not occur for a user preset directory load.** |
 
 ```bash
 LOG_DIR=~/Library/Application\ Support/OrcaSlicer/log
 NEWEST="$LOG_DIR/$(ls -t "$LOG_DIR" | head -1)"
 grep -E "can not find parent|can not find inherit preset|incorrect keys" "$NEWEST"
 ```
+
+> [!WARNING]
+> **The absence of an `incorrect keys` line proves nothing about a user preset.**
+> A controlled test on OrcaSlicer 2.4.2 wrote a user filament preset with a
+> pure-junk key (`zz_not_a_real_setting`) and a wrong-domain key (`layer_height`,
+> a process key). After a restart, OrcaSlicer loaded the preset, the loaded count
+> matched the file count, and the log held no `incorrect keys` line. The format
+> string is in the binary, and the same log file holds `[warning]` lines, so this
+> is not a log-verbosity effect: `Preset::remove_invalid_keys` does not run, or
+> does not log, on the user preset directory load path. It applies on other paths,
+> such as a project (3mf) load or `import_json_presets`.
+>
+> Use static known-key validation against a typo or a wrong-domain key: `clone`
+> refuses an unknown or wrong-domain `--set` key, and `auto` reports an
+> `[unknown key]` warning. `doctor` reports this check as `NOT CHECKED`.
 
 A `can not find parent` line on a user preset whose parent is another **user**
 preset is expected behaviour, not a typo. A user preset cannot inherit from

@@ -358,6 +358,63 @@ class TestOrcaValidator(unittest.TestCase):
         data = self._run_clone(["--inherits", "fdm_process_common"])
         self.assertEqual(data["inherits"], "fdm_process_common")
 
+    # --- Regression coverage: the manual-steps notice ---
+    # A multi-material / support-interface setup needs two settings that no preset can
+    # carry: the flushing volumes (they live in OrcaSlicer.conf, per printer, sized by
+    # the whole filament set on the plate) and the support-interface AMS slot index
+    # (it depends on the operator's physical slot layout). A generated preset set
+    # therefore validates clean and still does not print correctly. The clone command
+    # prints the checklist at creation time so the operator learns this even when the
+    # agent never read the recipe. The notice is informational: exit code stays 0.
+
+    def _clone_filament_proc(self, extra_args, out_path):
+        cmd = [
+            sys.executable, str(self.root_dir / "validate_orca.py"), "clone", "filament",
+            str(self.examples_dir / "pla_filament.json"),
+            "--name", "My Cloned Filament",
+            "--profiles-dir", str(self.examples_dir),
+            "--out", str(out_path),
+            "--ignore-running",
+        ] + extra_args
+        return subprocess.run(cmd, capture_output=True, text=True)
+
+    def test_clone_marking_filament_as_support_prints_manual_steps(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = Path(tmp) / "cloned.json"
+            proc = self._clone_filament_proc(
+                ["--set", 'filament_is_support=["1"]'], out_path)
+            self.assertEqual(proc.returncode, 0, f"clone failed: {proc.stderr}")
+            self.assertIn("REQUIRED MANUAL STEPS", proc.stdout)
+            self.assertIn("Flushing volumes", proc.stdout)
+            self.assertIn("Support interface filament", proc.stdout)
+            self.assertIn("recipes.md", proc.stdout)
+
+    def test_clone_of_plain_filament_does_not_print_manual_steps(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = Path(tmp) / "cloned.json"
+            proc = self._clone_filament_proc(
+                ["--set", 'nozzle_temperature=["225"]'], out_path)
+            self.assertEqual(proc.returncode, 0, f"clone failed: {proc.stderr}")
+            self.assertNotIn("REQUIRED MANUAL STEPS", proc.stdout)
+
+    def test_clone_with_zero_support_gap_prints_manual_steps(self):
+        # Zero gap between support and model only works because the two materials do
+        # not bond, so it is the mutual-support signature even with no filament index
+        # set anywhere in the preset.
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = Path(tmp) / "cloned.json"
+            proc = self._clone_proc(
+                ["--set", 'support_top_z_distance="0"'], out_path)
+            self.assertEqual(proc.returncode, 0, f"clone failed: {proc.stderr}")
+            self.assertIn("REQUIRED MANUAL STEPS", proc.stdout)
+
+    def test_clone_of_plain_process_does_not_print_manual_steps(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = Path(tmp) / "cloned.json"
+            proc = self._clone_proc(["--set", 'outer_wall_speed="190"'], out_path)
+            self.assertEqual(proc.returncode, 0, f"clone failed: {proc.stderr}")
+            self.assertNotIn("REQUIRED MANUAL STEPS", proc.stdout)
+
     def _write_parent_fixture(self, tmp_dir, name, compatible_printers=None):
         """Writes a self-contained process profile into tmp_dir and returns its path.
         Self-contained (the example's own parent chain is merged in first) so the clone
@@ -709,6 +766,91 @@ class TestOrcaValidator(unittest.TestCase):
             self.assertEqual(report["removed_keys"], [])
             self.assertTrue(report["healthy"])
             self.assertFalse(any(c["mismatch"] for c in report["counts"]))
+
+    # --- The key-removal check is BLIND on the user preset directory load path ---
+    # EMPIRICAL FINDING, OrcaSlicer 2.4.2, controlled experiment:
+    #   A user filament preset was written with two bogus keys: zz_not_a_real_setting
+    #   (pure junk) and layer_height (a real PROCESS key in a FILAMENT preset).
+    #   OrcaSlicer was restarted. The preset LOADED ("load config successful", and the
+    #   loaded count matched the file count) and NO "incorrect keys" line was emitted.
+    #   The format string IS in the binary, and [warning] lines ARE captured in that
+    #   same log file, so this is not a verbosity effect. A grep for "incorrect keys"
+    #   over every log file on the machine returns nothing, ever.
+    # CONCLUSION: Preset::remove_invalid_keys does not run, or does not log, on the
+    #   user preset DIRECTORY load path. It presumably applies on another path
+    #   (project/3mf, import_json_presets). So `doctor` CANNOT detect a typo'd or
+    #   wrong-domain key in a user preset, and the absence of removal lines is NOT
+    #   evidence that the keys are valid.
+    # THEREFORE: the zero case must not print an [OK] marker. A false reassurance is
+    #   worse than no check. Do NOT "fix" these tests back into a green [OK] line --
+    #   re-run the experiment first. The parser and the non-zero reporting path stay,
+    #   because the other load paths and future versions do emit the line.
+
+    def _doctor_stdout(self, log_lines, presets=None, extra_args=()):
+        """Runs the doctor CLI over a synthetic fixture and returns its stdout."""
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "user" / "default"
+            user_dir, log_path = self._write_doctor_fixture(
+                tmp,
+                presets if presets is not None else {"process": ["ZZ Doctor Fine"], "filament": [], "machine": []},
+                [line(base) if callable(line) else line for line in log_lines],
+            )
+            proc = subprocess.run([
+                sys.executable, str(self.root_dir / "validate_orca.py"), "doctor",
+                "--log", str(log_path), "--user-dir", str(user_dir), "--no-color", *extra_args,
+            ], capture_output=True, text=True)
+            self.assertNotIn("Traceback", proc.stderr)
+            return proc.stdout
+
+    def _healthy_log_lines(self):
+        return [
+            lambda base: self._loaded_line(base, "process", 1),
+            lambda base: self._loaded_line(base, "filament", 0),
+            lambda base: self._loaded_line(base, "machine", 0),
+        ]
+
+    def test_doctor_zero_removals_does_not_claim_the_keys_are_valid(self):
+        out = self._doctor_stdout(self._healthy_log_lines())
+        # Isolate the key-removal section: everything from its header to the next blank line.
+        section = out.split("Keys removed by OrcaSlicer (0)", 1)[1].split("\n\n", 1)[0]
+        # No [OK] marker: nothing was verified, so nothing may look verified.
+        self.assertNotIn("[OK]", section, f"the blind check still claims a pass:\n{section}")
+        self.assertIn("[NOT CHECKED]", section)
+        # The output must say WHY the absence means nothing, and what to use instead.
+        self.assertIn("does not log key removal", section)
+        self.assertIn("no evidence", section)
+        self.assertIn("clone", section)
+        # The count-mismatch section, which IS a working check, keeps its [OK].
+        self.assertIn("[OK]", out.split("Preset counts", 1)[1])
+
+    def test_doctor_json_marks_the_key_check_as_not_capable_when_no_removals(self):
+        report = json.loads(self._doctor_stdout(self._healthy_log_lines(), extra_args=("--json",)))
+        # An empty list alone cannot tell a machine consumer "clean" from "blind".
+        self.assertEqual(report["removed_keys"], [])
+        self.assertEqual(report["removed_keys_check"], "not-capable")
+        self.assertFalse(report["removed_keys_check_detects_user_preset_loads"])
+
+    def test_doctor_still_reports_removals_when_the_log_does_name_them(self):
+        # Unchanged behaviour: another load path (project/3mf, import) or a future
+        # OrcaSlicer version does emit the line, and it must still be reported.
+        removal = (f'{self.LOG_PREFIX}The preset "ZZ Doctor Fine" contains the following '
+                   f'incorrect keys: zz_not_a_real_setting, which were removed')
+        out = self._doctor_stdout([removal] + self._healthy_log_lines())
+        self.assertIn("Keys removed by OrcaSlicer (1)", out)
+        self.assertIn("[REMOVED] ZZ Doctor Fine: zz_not_a_real_setting", out)
+        self.assertNotIn("[NOT CHECKED]", out)
+
+        report = json.loads(self._doctor_stdout([removal] + self._healthy_log_lines(), extra_args=("--json",)))
+        self.assertEqual(report["removed_keys_check"], "removals-found")
+        self.assertTrue(report["removed_keys_check_detects_user_preset_loads"])
+
+    def test_doctor_still_reports_known_key_drift_when_removals_are_logged(self):
+        # The drift cross-check is the other half of the non-zero path and is untouched.
+        drift = (f'{self.LOG_PREFIX}The preset "ZZ Doctor Fine" contains the following '
+                 f'incorrect keys: top_shell_layers, which were removed')
+        out = self._doctor_stdout([drift] + self._healthy_log_lines())
+        self.assertIn("KNOWN-KEY DRIFT (1)", out)
+        self.assertIn("top_shell_layers", out)
 
     def test_doctor_degrades_gracefully_without_a_log_directory(self):
         # A machine with no OrcaSlicer install must get a clear message and a distinct
