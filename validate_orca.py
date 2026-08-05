@@ -1089,9 +1089,15 @@ def main():
             out_path = Path(args.out).resolve()
         else:
             if paths_info["user_existing"]:
-                user_dir = paths_info["user_existing"][0]
+                # The user_existing path is usually the root 'OrcaSlicer' folder or 'user' folder.
+                # OrcaSlicer stores presets in 'user/default' for local users.
+                user_base = paths_info["user_existing"][0]
+                if user_base.name != "default":
+                    user_dir = user_base / "user" / "default"
+                else:
+                    user_dir = user_base
             else:
-                user_dir = paths_info["user_candidates"][0]
+                user_dir = paths_info["user_candidates"][0] / "user" / "default"
             out_path = user_dir / args.domain / f"{args.name}.json"
             print(f"Auto-resolved output path to: {out_path}")
 
