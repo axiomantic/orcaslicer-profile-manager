@@ -46,6 +46,7 @@ though both are `.json` files with mostly the same key names:
 | `instantiation` | Sometimes present | Not used. |
 | `inherits` | Present, points further up the built-in chain | **Required, non-empty**, must name an existing profile (system or user). A standalone preset with no `inherits` is rejected — full independence from a parent is not a concept OrcaSlicer's preset system supports. |
 | `from` | Absent | `"User"` |
+| `version` | Sometimes absent | **Required.** A user preset with no `version` field is silently skipped by the loader even if everything else is correct (confirmed empirically). |
 | `<domain>_settings_id` (`print_settings_id` / `filament_settings_id` / `printer_settings_id`) | — | Should be set, equal to `name`. |
 | Body | Every setting — a complete, self-contained definition | Only the keys that differ from `inherits` (a *diff*), unless you deliberately flattened everything with `--de-link-inherits` |
 

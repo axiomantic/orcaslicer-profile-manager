@@ -112,6 +112,7 @@ class TestOrcaValidator(unittest.TestCase):
             "name": "My Clone",
             "from": "User",
             "print_settings_id": "My Clone",
+            "version": "2.1.0.19",
             "outer_wall_speed": "180",
         }
         self.assertEqual(lint_user_preset(clean, "process"), [])
@@ -138,6 +139,10 @@ class TestOrcaValidator(unittest.TestCase):
         self.assertNotIn("setting_id", data)
         self.assertNotIn("compatible_printers", data)
         self.assertEqual(data["print_settings_id"], "My Cloned Process")
+        # A user preset missing "version" is silently skipped by OrcaSlicer's
+        # loader (confirmed against a real install) even though it's otherwise
+        # a perfectly valid diff — regression coverage for that specific field.
+        self.assertTrue(data.get("version"))
 
     def test_delinked_clone_produces_valid_user_preset(self):
         data = self._run_clone(["--de-link-inherits", "--set", 'outer_wall_speed="190"'])

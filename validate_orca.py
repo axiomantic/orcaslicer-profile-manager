@@ -81,6 +81,12 @@ DOMAIN_SETTINGS_ID_KEY = {
     "machine": "printer_settings_id",
 }
 
+# A user preset with no "version" field is silently skipped by OrcaSlicer's
+# loader (confirmed empirically: an otherwise-identical file with "version" set
+# loads correctly). This is the preset-format version, not the app version —
+# copied from a real installed 0.40mm-derived user preset that loads correctly.
+USER_PRESET_VERSION = "2.1.0.19"
+
 
 def lint_user_preset(profile_data: Dict[str, Any], domain: str) -> List[str]:
     """Checks a profile dict against OrcaSlicer's undocumented user-preset format rules.
@@ -102,6 +108,11 @@ def lint_user_preset(profile_data: Dict[str, Any], domain: str) -> List[str]:
         )
     if profile_data.get("from") != "User":
         violations.append("'from' must be set to \"User\" for a user preset.")
+    if not profile_data.get("version"):
+        violations.append(
+            "'version' is missing/empty. OrcaSlicer's loader silently skips user "
+            "presets with no version field."
+        )
     settings_id_key = DOMAIN_SETTINGS_ID_KEY.get(domain)
     if settings_id_key and not profile_data.get(settings_id_key):
         violations.append(f"'{settings_id_key}' is missing/empty; it should match 'name'.")
@@ -1144,6 +1155,7 @@ def main():
         profile_data["inherits"] = args.inherits if args.inherits else parent_name
         profile_data["name"] = args.name
         profile_data["from"] = "User"
+        profile_data.setdefault("version", USER_PRESET_VERSION)
 
         settings_id_key = DOMAIN_SETTINGS_ID_KEY.get(args.domain)
         if settings_id_key:
