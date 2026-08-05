@@ -75,15 +75,16 @@ python scripts/validate_orca.py diff ./profileA.json ./profileB.json --json
 ## 5. Cloning Profiles: Inherited vs Independent (`clone`)
 
 > [!IMPORTANT]
-> **Output Location:** Always output cloned user profiles directly to the cross-platform user default preset location (e.g., `~/Library/Application Support/OrcaSlicer/user/default/<domain>/` on macOS). Use `locate` to find the exact path.
-> **Naming Conventions:** If the profile is specific to a nozzle size, the `--name` parameter must include the exact nozzle suffix expected by OrcaSlicer (e.g., `@BBL X1C 0.8 nozzle`) so that it populates correctly in the UI dropdowns.
+> **Output Location:** Omit the `--out` parameter entirely! The script will automatically resolve the exact cross-platform user profile path and save the file and `.info` cache there.
+> **Interview the Operator:** Use the `ask_question` tool to ask the operator if the profile should be bound strictly to a specific printer/nozzle or if it should be universal.
+> - **Printer-bound:** Add the exact printer suffix expected by OrcaSlicer (e.g., `@BBL X1C 0.8 nozzle`) to the `--name`.
+> - **Universal:** Do NOT append a printer suffix to `--name`. Pass `--set compatible_printers='[]'` to clear the filter.
 
 ### Option A: Standard Inherited Clone (Child Profile)
 Creates a profile inheriting from a parent preset (e.g. `"inherits": "fdm_process_common"`).
 ```bash
 python scripts/validate_orca.py clone filament "Bambu PLA Basic @BBL X1C" \
   --name "Custom Bambu PLA Basic" \
-  --out ./custom_bambu_pla.json \
   --set nozzle_temperature='["225"]'
 ```
 
@@ -92,7 +93,6 @@ Flattens parent inheritance settings and removes the `"inherits"` link to protec
 ```bash
 python scripts/validate_orca.py clone process "0.20mm Standard @Voron" \
   --name "0.20mm Standalone Voron" \
-  --out ./standalone_process.json \
   --de-link-inherits \
   --set outer_wall_speed='"180"'
 ```

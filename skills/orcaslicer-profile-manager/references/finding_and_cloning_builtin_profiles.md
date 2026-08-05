@@ -46,8 +46,10 @@ python scripts/validate_orca.py list-profiles --query "Bambu" --json
 ## 4. Cloning and Customizing Profiles
 
 > [!IMPORTANT]
-> **Output Location:** Always output cloned user profiles directly to the cross-platform user default preset location (e.g., `~/Library/Application Support/OrcaSlicer/user/default/<domain>/` on macOS). Use `locate` to find the exact path.
-> **Naming Conventions:** If the profile is specific to a nozzle size, the `--name` parameter must include the exact nozzle suffix expected by OrcaSlicer (e.g., `@BBL X1C 0.8 nozzle`) so that it populates correctly in the UI dropdowns.
+> **Output Location:** Omit the `--out` parameter entirely! The script will automatically resolve the exact cross-platform user profile path and save the file and `.info` cache there.
+> **Interview the Operator:** Use the `ask_question` tool to ask the operator if the profile should be bound strictly to a specific printer/nozzle or if it should be universal.
+> - **Printer-bound:** Add the exact printer suffix expected by OrcaSlicer (e.g., `@BBL X1C 0.8 nozzle`) to the `--name`.
+> - **Universal:** Do NOT append a printer suffix to `--name`. Pass `--set compatible_printers='[]'` to clear the filter.
 
 Use `clone` to find a built-in profile, copy it to a new output path, generate a new unique 16-character `setting_id`, set a new profile `name`, apply parameter overrides, and validate:
 
@@ -55,7 +57,6 @@ Use `clone` to find a built-in profile, copy it to a new output path, generate a
 ```bash
 python scripts/validate_orca.py clone filament "Bambu PLA Basic @BBL X1C" \
   --name "Custom PLA HighTemp" \
-  --out ./custom_pla_hightemp.json \
   --set nozzle_temperature='["230"]' \
   --set filament_flow_ratio='["0.96"]'
 ```
@@ -65,7 +66,6 @@ Flattens parent settings and removes `"inherits"` link to protect custom profile
 ```bash
 python scripts/validate_orca.py clone process "0.20mm Standard @Voron" \
   --name "0.20mm HighSpeed Independent" \
-  --out ./custom_process_speed.json \
   --de-link-inherits \
   --set outer_wall_speed='"180"' \
   --set inner_wall_speed='"220"'

@@ -714,7 +714,7 @@ SUBCOMMAND SUMMARY:
     clone_parser.add_argument("domain", choices=["vendor", "machine", "filament", "process"], help="Target profile domain")
     clone_parser.add_argument("target", help="Name or file path of existing profile to clone")
     clone_parser.add_argument("--name", required=True, help="New profile name")
-    clone_parser.add_argument("--out", "-o", required=True, help="Output JSON file path for cloned profile")
+    clone_parser.add_argument("--out", "-o", help="Output JSON file path. If omitted, uses default user profile directory.")
     clone_parser.add_argument("--inherits", help="Override parent 'inherits' profile name")
     clone_parser.add_argument("--de-link-inherits", action="store_true", help="Flatten parent profile properties and remove 'inherits' link to make profile completely independent of stock profile updates")
     clone_parser.add_argument("--compatible-printers", nargs="+", help="Set compatible printer model names for compatible_printers field")
@@ -1068,6 +1068,7 @@ def main():
 
         profile_data["name"] = args.name
         profile_data["setting_id"] = generate_setting_id()
+        profile_data["from"] = "User"
 
         if args.compatible_printers:
             profile_data["compatible_printers"] = args.compatible_printers
@@ -1084,7 +1085,16 @@ def main():
                     parsed_val = v
                 profile_data[k] = parsed_val
 
-        out_path = Path(args.out).resolve()
+        if args.out:
+            out_path = Path(args.out).resolve()
+        else:
+            if paths_info["user_existing"]:
+                user_dir = paths_info["user_existing"][0]
+            else:
+                user_dir = paths_info["user_candidates"][0]
+            out_path = user_dir / args.domain / f"{args.name}.json"
+            print(f"Auto-resolved output path to: {out_path}")
+
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
         if not args.no_validate:
@@ -1105,6 +1115,10 @@ def main():
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump(profile_data, f, indent=2)
             f.write("\n")
+
+        info_path = out_path.with_suffix(".info")
+        with open(info_path, "w", encoding="utf-8") as info_f:
+            info_f.write(f"sync_info = create\nuser_id = \nsetting_id = \nbase_id = {profile_data['setting_id']}\nupdated_time = 0\n")
 
         print(colorize(f"Successfully cloned profile to {out_path}", Colors.OKGREEN))
         print(f"  - Name: {args.name}")
