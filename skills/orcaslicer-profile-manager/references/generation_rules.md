@@ -7,7 +7,9 @@ When generating new OrcaSlicer profiles, adhere strictly to domain-specific requ
 > use `template` for building a vendor bundle or a from-scratch reference file. If
 > the output is meant to be dropped directly into a `user/default/<domain>/`
 > folder as a *user* preset, it must NOT carry `type`/`setting_id`/
-> `compatible_printers` and MUST carry a non-empty `inherits`. Prefer `clone`
+> `compatible_printers` and MUST carry a non-empty `inherits` that names a
+> **system** preset. A user preset cannot inherit from another user preset;
+> OrcaSlicer drops the child silently. Prefer `clone`
 > (which does this automatically) over hand-writing a user preset from a
 > template. See SKILL.md § "User Presets vs System Presets".
 

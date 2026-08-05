@@ -14,6 +14,14 @@ what a preset cannot do.
 > bundled vendor profiles. Values are starting points, not calibrated results.
 > Print a test part after you apply a recipe.
 
+> [!WARNING]
+> **Every user preset in every recipe below is flat.** A user preset inherits
+> directly from a **system** preset. A user preset cannot inherit from another
+> user preset; OrcaSlicer drops the child silently. Do not build a shared "base"
+> user preset with "variant" presets under it. When two presets in a recipe share
+> a value, write that value into both preset files. See SKILL.md §
+> "Undocumented Serialization Gotchas", item 6.
+
 ---
 
 ## Recipe 1: Large Nozzle Correction (0.6 / 0.8 / 1.0 mm)
@@ -154,6 +162,28 @@ PLA and PETG do not bond to each other. Use one material as the support
 interface for the other. The support comes off cleanly and leaves a smooth
 surface.
 
+### Preset structure for this recipe: three flat presets
+
+This recipe needs one process preset and two filament presets. The two filament
+presets share values, for example the plate temperature pair from section 2.4.
+**Do not build a shared base preset for those values.** OrcaSlicer cannot load a
+user preset that inherits from another user preset.
+
+Build this structure:
+
+```
+[Generic PLA @BBL X1C]    (SYSTEM)  ──> [Mutual Support PLA]    (user, flat)
+[Generic PETG HF @BBL X1C](SYSTEM)  ──> [Mutual Support PETG]   (user, flat)
+[0.20mm Standard @BBL X1C](SYSTEM)  ──> [Mutual Support 0.20mm] (user, flat)
+```
+
+Each filament preset names a **system** filament profile in `inherits`. Each
+filament preset repeats the shared values in its own body. Write the plate
+temperature pair into both filament files.
+
+Tell the operator this before you generate: a later change to a shared value must
+be applied to both files. There is no single place to edit it.
+
 ### 2.1 Process domain: zero-gap interface
 
 | Key | Type | Value | Reason |
@@ -241,6 +271,9 @@ A value of `"0"` means the filament does not support that plate.
 
 - **You cannot assign a per-object support material from a preset.** Per-object
   overrides live in the project file, not the preset.
+- **You cannot share the two filament presets' common values through a base
+  preset.** A user preset cannot inherit from another user preset. Repeat the
+  shared values in each file.
 
 ---
 
@@ -300,4 +333,5 @@ pull away.
 - [Editing & DAG Inheritance Guide](editing_rules.md)
 - [Generation Guide](generation_rules.md)
 - SKILL.md § "Before You Generate: Operator Interview"
-- SKILL.md § "Undocumented Serialization Gotchas"
+- SKILL.md § "Undocumented Serialization Gotchas" (item 6: no user-from-user inheritance)
+- [Finding & Cloning Built-in Profiles](finding_and_cloning_builtin_profiles.md) § 5 (read the OrcaSlicer log with `doctor`)

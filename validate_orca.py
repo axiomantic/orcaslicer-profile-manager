@@ -8,6 +8,7 @@ OrcaSlicer configuration and profile JSON files across operating systems.
 
 Subcommands:
   - locate        : Discover installed OrcaSlicer built-in app & user profile directories across OSes.
+  - doctor        : Read OrcaSlicer's own debug log for presets the runtime dropped, keys it removed, and count mismatches.
   - list-vendors  : List installed vendor ecosystems with counts of models, printers, filaments, processes.
   - list-profiles : Search and list installed built-in & user profiles with domain/vendor filters and tree view.
   - inspect       : Deep inspection of a profile (metadata, DAG inheritance chain, key parameters, child dependents, schema health).
@@ -29,8 +30,10 @@ import argparse
 import difflib
 import platform
 import random
+import re
 import string
 import subprocess
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple, Set
 
@@ -119,6 +122,91 @@ def lint_user_preset(profile_data: Dict[str, Any], domain: str) -> List[str]:
     if settings_id_key and not profile_data.get(settings_id_key):
         violations.append(f"'{settings_id_key}' is missing/empty; it should match 'name'.")
     return violations
+
+
+# A user preset can NEVER inherit from another user preset. OrcaSlicer's loader
+# (PresetCollection::load_presets, src/libslic3r/Preset.cpp) stages every preset it reads
+# during a directory pass in a *local* deque, and only merges that deque into the
+# collection AFTER the loop finishes. Parent lookup, meanwhile, goes through
+# find_preset2()/find_preset_internal(), which only searches the already-merged
+# collection — so a user preset can never see a sibling user preset as its parent, at any
+# load order, on any single pass (there is no retry). On failure the loader logs
+# "can not find parent %1% for config %2%!", bumps its error counter, and `continue`s: the
+# preset is DROPPED with no UI error at all. Preset.hpp says as much about find_preset2:
+# "This function should only be used when finding system(parent) presets for custom preset."
+#
+# The fix is always the same: point "inherits" at the nearest SYSTEM ancestor and inline
+# the values the skipped intermediate user presets declared. That is faithful, because the
+# parent is only a STARTING config — load_preset does `preset.config = inherit_preset->config;`
+# and then update_diff_values_to_child_config() lays the child's own keys on top.
+#
+# Keys that describe the preset rather than configure the slicer; they identify the
+# intermediate preset, not its settings, so they are never inlined into a child.
+FLATTEN_EXCLUDED_KEYS = frozenset(
+    ("name", "inherits", "from", "version", "compatible_printers") + USER_PRESET_FORBIDDEN_KEYS
+) | set(DOMAIN_SETTINGS_ID_KEY.values())
+
+
+def is_user_preset(profile_data: Any) -> bool:
+    """Returns True when a profile dict is an OrcaSlicer *user* preset rather than a
+    system bundle profile. A user preset either says so outright ("from": "User"), or is
+    recognisable by the format it is required to use: no "type" key (system-only, see
+    USER_PRESET_FORBIDDEN_KEYS) plus a domain identity "*_settings_id" field."""
+    if not isinstance(profile_data, dict):
+        return False
+    if profile_data.get("from") == "User":
+        return True
+    if "type" in profile_data:
+        return False
+    return any(key in profile_data for key in DOMAIN_SETTINGS_ID_KEY.values())
+
+
+def find_nearest_system_ancestor(
+    resolver: "ProfileDAGResolver", profile_data: Dict[str, Any]
+) -> Tuple[Optional[str], Dict[str, Any]]:
+    """Walks UP the "inherits" chain from `profile_data` past every user preset and returns
+    (nearest_system_ancestor_name, merged_intermediate_overrides).
+
+    `merged_intermediate_overrides` is the union of the setting keys declared by every USER
+    preset on the way up — including `profile_data` itself — applied outermost-first so that
+    values nearer the child win. Metadata (FLATTEN_EXCLUDED_KEYS) is left out: only real
+    settings get inlined.
+
+    When `profile_data` is already a system preset this is a no-op: it returns that
+    profile's own name and an empty dict, so the common case is completely unchanged.
+    The ancestor name is None only when the chain runs out of "inherits" without ever
+    reaching a system preset; an unresolvable parent name is returned as-is, since the
+    caller ([unresolved inherits] / --inherits checks) reports that failure better."""
+    if not is_user_preset(profile_data):
+        return profile_data.get("name"), {}
+
+    user_chain = []          # child-first: [profile_data, ...outward]
+    ancestor_name = None
+    current = profile_data
+    visited: Set[str] = set()
+
+    while True:
+        name = current.get("name")
+        if name in visited:
+            break                                   # circular chain; stop with what we have
+        visited.add(name)
+        user_chain.append(current)
+
+        parent_name = current.get("inherits")
+        if not parent_name:
+            break                                   # chain ends without a system ancestor
+        parent = resolver.name_index.get(parent_name)
+        if parent is None or not is_user_preset(parent):
+            ancestor_name = parent.get("name") if parent else parent_name
+            break
+        current = parent
+
+    overrides: Dict[str, Any] = {}
+    for preset in reversed(user_chain):             # outermost first, nearest wins
+        for key, value in preset.items():
+            if key not in FLATTEN_EXCLUDED_KEYS:
+                overrides[key] = value
+    return ancestor_name, overrides
 
 
 # OrcaSlicer's preset loader silently drops any key it does not recognise: a typo'd
@@ -442,6 +530,348 @@ def get_orcaslicer_paths() -> Dict[str, List[Path]]:
     }
 
 
+# ---------------------------------------------------------------------------
+# Runtime log forensics ("doctor")
+# ---------------------------------------------------------------------------
+# Every other check in this file is static analysis: it reads a JSON file and
+# reasons about what OrcaSlicer *should* do with it. OrcaSlicer's own debug log is
+# the only place that says what it *did* do. A preset it refuses to load is silent
+# in the UI but always named in the log, so the log is the ground truth this tool
+# otherwise has no access to.
+PRESET_DOMAINS = ("process", "filament", "machine")
+
+
+def get_orcaslicer_log_dirs() -> List[Path]:
+    """Returns candidate OrcaSlicer log directories for this platform, in preference
+    order. Mirrors the user-config conventions of get_orcaslicer_paths(): the log
+    directory is always a "log" folder beside the "user" folder in the data dir."""
+    dirs: List[Path] = []
+
+    env_log = os.environ.get("ORCASLICER_LOG_DIR")
+    if env_log:
+        dirs.append(Path(env_log))
+
+    env_user = os.environ.get("ORCASLICER_USER_DIR")
+    if env_user:
+        # ORCASLICER_USER_DIR usually points at <data_dir>/user (or a sub-account
+        # folder below it); the log dir is a sibling of "user" in the data dir.
+        p = Path(env_user)
+        for base in (p, p.parent, p.parent.parent):
+            dirs.append(base / "log")
+
+    sys_os = platform.system()
+    if sys_os == "Darwin":
+        dirs.append(Path.home() / "Library/Application Support/OrcaSlicer/log")
+    elif sys_os == "Linux":
+        dirs.append(Path.home() / ".config/OrcaSlicer/log")
+        dirs.append(Path.home() / ".var/app/io.github.softfever.OrcaSlicer/config/OrcaSlicer/log")
+    elif sys_os == "Windows":
+        appdata = os.environ.get("APPDATA", "")
+        if appdata:
+            dirs.append(Path(appdata) / r"OrcaSlicer\log")
+
+    cwd_data = Path.cwd() / "data_dir"
+    if cwd_data.exists():
+        dirs.append(cwd_data / "log")
+
+    seen, ordered = set(), []
+    for d in dirs:
+        if str(d) not in seen:
+            seen.add(str(d))
+            ordered.append(d)
+    return ordered
+
+
+def find_newest_log(log_dirs: List[Path]) -> Optional[Path]:
+    """Returns the most recently modified OrcaSlicer log file across `log_dirs`, or
+    None when no readable log file exists. OrcaSlicer names them
+    debug_<Day>_<Mon>_<DD>_<HH>_<MM>_<SS>_<pid>.log.<n>; rotation means the newest
+    file is not the one with the newest name, so mtime decides."""
+    candidates: List[Path] = []
+    for d in log_dirs:
+        if not d.is_dir():
+            continue
+        for pattern in ("debug_*.log*", "*.log*"):
+            candidates.extend(p for p in d.glob(pattern) if p.is_file())
+            if candidates:
+                break
+    if not candidates:
+        return None
+    return max(set(candidates), key=lambda p: p.stat().st_mtime)
+
+
+# Three phrasings of the same fatal condition, from three OrcaSlicer code paths
+# (load, import, save). All three mean: the preset was DROPPED, and the UI said
+# nothing. Verified against OrcaSlicer 2.4.2 sources and a real log.
+_DROP_PATTERNS = (
+    re.compile(r"can not find parent preset for (?P<config>.+?)\s*,\s*inherits (?P<parent>.+?)\s*$"),
+    re.compile(r"can not find inherit preset for user preset (?P<config>.+?)\s*,\s*just skip"),
+    re.compile(r"can not find parent (?P<parent>.+?) for config (?P<config>.+?)!\s*$"),
+)
+
+# Emitted once per preset directory by PresetCollection::load_presets.
+_LOADED_RE = re.compile(r'loaded (?P<count>\d+) presets? from "(?P<dir>[^"]+)"\s*,\s*type (?P<type>[A-Za-z_]+)')
+
+# Emitted by Preset::remove_invalid_keys -- the runtime counterpart of this tool's
+# static known-key check. Whatever OrcaSlicer removed here really was rejected.
+_INCORRECT_KEYS_RE = re.compile(
+    r"contains the following incorrect keys:\s*(?P<keys>.+?)\s*,?\s*which (?:were|was) removed",
+    re.IGNORECASE,
+)
+
+
+def _preset_name_from_path(text: str) -> str:
+    """Reduces a logged config reference to a bare preset name. OrcaSlicer logs a
+    full .json path in some messages and a plain name in others; both must collapse
+    to the same identity so counts and cross-references line up."""
+    text = text.strip().strip('"')
+    if "/" in text or "\\" in text:
+        text = text.replace("\\", "/").rsplit("/", 1)[-1]
+    if text.lower().endswith(".json"):
+        text = text[:-5]
+    return text
+
+
+def _domain_from_config_path(text: str) -> Optional[str]:
+    parts = text.replace("\\", "/").split("/")
+    for domain in PRESET_DOMAINS:
+        if domain in parts[:-1]:
+            return domain
+    return None
+
+
+def _preset_name_from_log_prefix(prefix: str) -> str:
+    """Extracts the preset name from the text preceding 'contains the following
+    incorrect keys'. The name is quoted when OrcaSlicer has one to quote; otherwise
+    fall back to the message body after the log's own '[thread]:' prefix."""
+    quoted = re.findall(r'"([^"]+)"', prefix)
+    if quoted:
+        return _preset_name_from_path(quoted[-1])
+    tail = prefix.rsplit("]:", 1)[-1]
+    tail = re.sub(r"^.*?(?:Error in a preset file:)?\s*(?:The\s+)?[Pp]reset\s+", "", tail).strip()
+    return _preset_name_from_path(tail)
+
+
+def parse_orca_log(text: str) -> Dict[str, Any]:
+    """Parses an OrcaSlicer debug log into the three facts static analysis cannot
+    see: presets dropped for an unresolvable parent, keys OrcaSlicer stripped out of
+    a preset, and how many presets each directory actually loaded."""
+    dropped: List[Dict[str, str]] = []
+    removed: List[Dict[str, Any]] = []
+    loaded: Dict[str, Dict[str, Any]] = {}
+
+    for line in text.splitlines():
+        for pattern in _DROP_PATTERNS:
+            m = pattern.search(line)
+            if not m:
+                continue
+            groups = m.groupdict()
+            config = groups["config"]
+            entry = {
+                "preset": _preset_name_from_path(config),
+                "parent": (groups.get("parent") or "").strip() or None,
+                "domain": _domain_from_config_path(config),
+                "path": config.strip() if ("/" in config or "\\" in config) else None,
+            }
+            if entry not in dropped:
+                dropped.append(entry)
+            break
+
+        m = _INCORRECT_KEYS_RE.search(line)
+        if m:
+            keys = [k.strip().strip('"\'') for k in re.split(r"[,\s]+", m.group("keys")) if k.strip()]
+            removed.append({
+                "preset": _preset_name_from_log_prefix(line[:m.start()]),
+                "keys": keys,
+            })
+
+        m = _LOADED_RE.search(line)
+        if m:
+            domain = m.group("type").strip().lower()
+            # A session can load a directory more than once; the last report wins.
+            loaded[domain] = {"count": int(m.group("count")), "dir": m.group("dir")}
+
+    return {"dropped": dropped, "removed_keys": removed, "loaded": loaded}
+
+
+def _known_key_domains(key: str) -> List[str]:
+    if KNOWN_KEYS is None:
+        return []
+    return [d for d in PRESET_DOMAINS if key in KNOWN_KEYS["domains"].get(d, set())]
+
+
+def detect_known_key_drift(removed: List[Dict[str, Any]], preset_domains: Dict[str, str]) -> List[Dict[str, Any]]:
+    """Cross-references keys OrcaSlicer removed at runtime against known_keys.json.
+    A key our table calls valid but OrcaSlicer threw away is DRIFT: either the table
+    is wrong or the installed OrcaSlicer is a different version than it was
+    extracted from. Returns one record per removed-key occurrence that drifts."""
+    if KNOWN_KEYS is None:
+        return []
+    drift = []
+    for entry in removed:
+        domain = preset_domains.get(entry["preset"])
+        for key in entry["keys"]:
+            owners = _known_key_domains(key)
+            if not owners:
+                continue  # genuinely unknown to us too -- our table already agrees.
+            if domain is not None and domain not in owners:
+                continue  # a wrong-domain key; the static check already flags this.
+            drift.append({
+                "preset": entry["preset"],
+                "key": key,
+                "domain": domain,
+                "known_for": owners,
+            })
+    return drift
+
+
+def _resolve_user_dir(explicit: Optional[str], loaded: Dict[str, Dict[str, Any]]) -> Optional[Path]:
+    """Finds the preset directory whose contents the log's load counts describe.
+    Preference: what the operator named, then what the log itself named, then
+    discovery. The log's own path is trusted over discovery because it is the
+    directory OrcaSlicer actually read."""
+    if explicit:
+        return Path(explicit).expanduser()
+    for info in loaded.values():
+        d = Path(info["dir"])
+        if d.parent.exists():
+            return d.parent
+    for base in get_orcaslicer_paths()["user_existing"]:
+        if any((base / domain).is_dir() for domain in PRESET_DOMAINS):
+            return base
+    return None
+
+
+def run_doctor(log_path: Path, user_dir: Optional[Path]) -> Dict[str, Any]:
+    """Reads one OrcaSlicer log and reports what the runtime rejected. Returns a
+    machine-readable report; never raises for a merely unhealthy install."""
+    text = log_path.read_text(encoding="utf-8", errors="replace")
+    parsed = parse_orca_log(text)
+    resolved_dir = _resolve_user_dir(str(user_dir) if user_dir else None, parsed["loaded"])
+
+    # Map preset name -> domain, from the files on disk plus the paths in the log.
+    # Needed to decide which known_keys domain a removed key should be judged against.
+    preset_domains: Dict[str, str] = {}
+    files_by_domain: Dict[str, List[str]] = {}
+    newest_preset_mtime = 0.0
+    for domain in PRESET_DOMAINS:
+        d = (resolved_dir / domain) if resolved_dir else None
+        names = sorted(p.stem for p in d.glob("*.json")) if d and d.is_dir() else []
+        files_by_domain[domain] = names
+        for name in names:
+            preset_domains.setdefault(name, domain)
+        if d and d.is_dir():
+            for p in d.glob("*.json"):
+                newest_preset_mtime = max(newest_preset_mtime, p.stat().st_mtime)
+    for entry in parsed["dropped"]:
+        if entry["domain"]:
+            preset_domains.setdefault(entry["preset"], entry["domain"])
+
+    counts = []
+    for domain in PRESET_DOMAINS:
+        info = parsed["loaded"].get(domain)
+        on_disk = files_by_domain[domain]
+        record: Dict[str, Any] = {
+            "domain": domain,
+            "files": len(on_disk),
+            "loaded": info["count"] if info else None,
+            "dir": info["dir"] if info else (str(resolved_dir / domain) if resolved_dir else None),
+            "mismatch": False,
+            "unaccounted": [],
+            "unexplained": 0,
+        }
+        if info is not None and resolved_dir is not None and record["loaded"] != record["files"]:
+            record["mismatch"] = True
+            dropped_here = [e["preset"] for e in parsed["dropped"] if preset_domains.get(e["preset"]) == domain]
+            record["unaccounted"] = [n for n in dropped_here if n in on_disk] or dropped_here
+            record["unexplained"] = max(0, (record["files"] - record["loaded"]) - len(record["unaccounted"]))
+        counts.append(record)
+
+    log_mtime = log_path.stat().st_mtime
+    stale = bool(newest_preset_mtime and log_mtime < newest_preset_mtime)
+
+    return {
+        "log": str(log_path),
+        "log_mtime": datetime.fromtimestamp(log_mtime).isoformat(timespec="seconds"),
+        "user_dir": str(resolved_dir) if resolved_dir else None,
+        "stale": stale,
+        "newest_preset_mtime": (
+            datetime.fromtimestamp(newest_preset_mtime).isoformat(timespec="seconds")
+            if newest_preset_mtime else None
+        ),
+        "dropped": parsed["dropped"],
+        "removed_keys": parsed["removed_keys"],
+        "known_key_drift": detect_known_key_drift(parsed["removed_keys"], preset_domains),
+        "known_keys_version": KNOWN_KEYS["version"] if KNOWN_KEYS else None,
+        "counts": counts,
+        "healthy": not parsed["dropped"] and not any(c["mismatch"] for c in counts),
+    }
+
+
+def print_doctor_report(report: Dict[str, Any], no_color: bool = False) -> None:
+    print(colorize("OrcaSlicer Runtime Log Diagnosis", Colors.HEADER, no_color))
+    print("=" * 60)
+    print(f"Log       : {report['log']}")
+    print(f"Written   : {report['log_mtime']}")
+    print(f"User dir  : {report['user_dir'] or '(not found)'}")
+    if report["stale"]:
+        print(colorize(
+            f"  STALE LOG: presets were modified at {report['newest_preset_mtime']}, after this log "
+            f"was written. Restart OrcaSlicer and re-run, or this report describes an older state.",
+            Colors.WARNING, no_color))
+    print()
+
+    print(colorize(f"Dropped presets ({len(report['dropped'])})", Colors.BOLD, no_color))
+    if not report["dropped"]:
+        print(f"  [{colorize('OK', Colors.OKGREEN, no_color)}] no preset was rejected for an unresolvable parent.")
+    for entry in report["dropped"]:
+        tag = colorize("DROPPED", Colors.FAIL, no_color)
+        domain = entry["domain"] or "?"
+        print(f"  [{tag}] ({domain}) {entry['preset']}")
+        print(f"            unresolved parent: {entry['parent'] or '(not named in log)'}")
+    print()
+
+    print(colorize(f"Keys removed by OrcaSlicer ({len(report['removed_keys'])})", Colors.BOLD, no_color))
+    if not report["removed_keys"]:
+        print(f"  [{colorize('OK', Colors.OKGREEN, no_color)}] no preset had keys stripped at load time.")
+    for entry in report["removed_keys"]:
+        tag = colorize("REMOVED", Colors.WARNING, no_color)
+        print(f"  [{tag}] {entry['preset']}: {', '.join(entry['keys'])}")
+    if report["known_key_drift"]:
+        print()
+        print(colorize(f"KNOWN-KEY DRIFT ({len(report['known_key_drift'])})", Colors.FAIL, no_color))
+        print(f"  schemas/known_keys.json was extracted from OrcaSlicer {report['known_keys_version'] or '?'}.")
+        for d in report["known_key_drift"]:
+            print(f"  [{colorize('DRIFT', Colors.FAIL, no_color)}] '{d['key']}' is listed as a valid "
+                  f"{'/'.join(d['known_for'])} setting, but OrcaSlicer removed it from {d['preset']}.")
+        print("  Our key table disagrees with the installed OrcaSlicer. Re-run tools/extract_known_keys.py.")
+    print()
+
+    print(colorize("Preset counts (files on disk vs presets OrcaSlicer loaded)", Colors.BOLD, no_color))
+    for c in report["counts"]:
+        if c["loaded"] is None:
+            print(f"  [{colorize('SKIP', Colors.WARNING, no_color)}] {c['domain']:9s} "
+                  f"files={c['files']} loaded=? (log reports no load for this directory)")
+        elif c["mismatch"]:
+            print(f"  [{colorize('MISMATCH', Colors.FAIL, no_color)}] {c['domain']:9s} "
+                  f"files={c['files']} loaded={c['loaded']}")
+            for name in c["unaccounted"]:
+                print(f"            unaccounted for: {name}")
+            if c["unexplained"]:
+                print(f"            {c['unexplained']} further preset(s) unaccounted for with no log line naming them.")
+        else:
+            print(f"  [{colorize('OK', Colors.OKGREEN, no_color)}] {c['domain']:9s} "
+                  f"files={c['files']} loaded={c['loaded']}")
+    print("=" * 60)
+    if report["healthy"]:
+        print(colorize("No dropped presets and no count mismatches.", Colors.OKGREEN, no_color))
+    else:
+        print(colorize(
+            f"{len(report['dropped'])} dropped preset(s), "
+            f"{sum(1 for c in report['counts'] if c['mismatch'])} count mismatch(es).",
+            Colors.FAIL, no_color))
+
+
 class OrcaSchemaStore:
     """Loads and manages JSON Schemas and their cross-file $ref registry."""
     def __init__(self, schema_dir: Path):
@@ -702,6 +1132,24 @@ class OrcaValidator:
                     f"resolved; run 'list-profiles' to find the exact parent name."
                 )
 
+        # A parent that resolves is still not necessarily a parent OrcaSlicer can USE: a
+        # user preset naming another *user* preset is dropped by the loader just as
+        # silently as one naming a parent that does not exist at all (see
+        # FLATTEN_EXCLUDED_KEYS comment above for the mechanism).
+        if looks_like_user_preset and isinstance(data, dict):
+            inherits = data.get("inherits")
+            parent = self.dag_resolver.name_index.get(inherits) if inherits else None
+            if parent is not None and is_user_preset(parent):
+                ancestor, _ = find_nearest_system_ancestor(self.dag_resolver, data)
+                ancestor_str = f"'{ancestor}'" if ancestor else "the nearest system preset"
+                warnings.append(
+                    f"[user-from-user inherits] Parent profile '{inherits}' is itself a user preset. "
+                    f"OrcaSlicer cannot resolve a user preset's parent to another user preset and "
+                    f"silently drops the child, so this preset will never appear. Point 'inherits' at "
+                    f"{ancestor_str} instead and inline the intermediate values "
+                    f"(tools/flatten_user_inherits.py does exactly that)."
+                )
+
         # Keys OrcaSlicer does not recognise for this domain are accepted by the schema
         # but silently dropped by the preset loader, so surface them as warnings too.
         if isinstance(data, dict) and target_domain in DOMAIN_SETTINGS_ID_KEY:
@@ -844,6 +1292,7 @@ Use the subcommands below to inspect, list, diff, generate, clone, de-link inher
 
 SUBCOMMAND SUMMARY:
   locate        : Discover installed OrcaSlicer built-in app & user profile directories.
+  doctor        : Diagnose the installed setup from OrcaSlicer's own debug log (silently dropped presets, removed keys, count mismatches).
   list-vendors  : List all installed vendor ecosystems (BBL, Creality, Voron, etc.) with model/printer/profile counts.
   list-profiles : Search built-in & user profiles by domain (machine, filament, process, vendor), vendor, or query.
   inspect       : Deep inspection of a profile (metadata, DAG inheritance chain, key parameters, child dependents, schema health).
@@ -888,6 +1337,10 @@ SUBCOMMAND SUMMARY:
 
 7. Validate OrcaSlicer Profiles:
    validate_orca.py auto ./resources/profiles/ --json
+
+8. Diagnose What OrcaSlicer Actually Rejected At Runtime:
+   validate_orca.py doctor
+   validate_orca.py doctor --log ~/Library/Application\\ Support/OrcaSlicer/log/debug_....log.0 --json
 """
     )
 
@@ -919,6 +1372,12 @@ SUBCOMMAND SUMMARY:
     template_parser.add_argument("--out", "-o", type=str, help="Output file path. Defaults to stdout.")
 
     subparsers.add_parser("locate", help="Locate installed built-in resources & user configuration directories across macOS, Linux, and Windows")
+
+    doctor_parser = subparsers.add_parser("doctor", help="Read OrcaSlicer's own debug log to find presets the runtime silently dropped, keys it removed, and file-vs-loaded count mismatches")
+    doctor_parser.add_argument("--log", type=str, help="Path to a specific OrcaSlicer debug log. Defaults to the newest log in the platform log directory.")
+    doctor_parser.add_argument("--user-dir", type=str, help="User preset directory containing process/, filament/, machine/ subfolders. Defaults to the directory named in the log.")
+    doctor_parser.add_argument("--json", action="store_true", help="Output the diagnosis in JSON format")
+    doctor_parser.add_argument("--no-color", action="store_true", help="Disable colored terminal output")
 
     list_vendors_parser = subparsers.add_parser("list-vendors", help="List installed vendor ecosystems with counts of models, printers, filaments, processes")
     list_vendors_parser.add_argument("--json", action="store_true", help="Output results in JSON format")
@@ -993,6 +1452,35 @@ def main():
                 print(f"    - {p}")
         print("=" * 60)
         sys.exit(0)
+
+    # Subcommand: doctor
+    if args.subcommand == "doctor":
+        if args.log:
+            log_path = Path(args.log).expanduser()
+            if not log_path.is_file():
+                msg = f"No OrcaSlicer log at {log_path}. Pass an existing file with --log."
+                print(json.dumps({"ok": False, "error": msg}, indent=2) if args.json
+                      else colorize(f"ERROR: {msg}", Colors.FAIL, args.no_color))
+                sys.exit(2)
+        else:
+            log_dirs = get_orcaslicer_log_dirs()
+            log_path = find_newest_log(log_dirs)
+            if log_path is None:
+                msg = (
+                    "No OrcaSlicer log directory or log file was found, so runtime diagnosis is "
+                    "not possible. Checked: " + ", ".join(str(d) for d in log_dirs) +
+                    ". Run OrcaSlicer once, or pass a log explicitly with --log."
+                )
+                print(json.dumps({"ok": False, "error": msg}, indent=2) if args.json
+                      else colorize(f"ERROR: {msg}", Colors.FAIL, args.no_color))
+                sys.exit(2)
+
+        report = run_doctor(log_path, Path(args.user_dir).expanduser() if args.user_dir else None)
+        if args.json:
+            print(json.dumps(report, indent=2))
+        else:
+            print_doctor_report(report, args.no_color)
+        sys.exit(0 if report["healthy"] else 1)
 
     # Subcommand: list-vendors
     if args.subcommand == "list-vendors":
@@ -1322,6 +1810,26 @@ def main():
         #     not the link target.
         parent_name = raw_source.get("name") or args.target
 
+        # ...with one hard exception: the source may not be a system preset. OrcaSlicer
+        # cannot resolve a user preset's parent to another user preset and drops the child
+        # outright (see FLATTEN_EXCLUDED_KEYS comment above), so cloning from a user preset
+        # has to skip past it to the nearest SYSTEM ancestor and re-declare, in the child,
+        # every setting the skipped user presets contributed. --set is applied further down
+        # and therefore still wins over anything inlined here.
+        flattened_overrides: Dict[str, Any] = {}
+        if is_user_preset(raw_source):
+            system_ancestor, flattened_overrides = find_nearest_system_ancestor(resolver, raw_source)
+            if system_ancestor:
+                parent_name = system_ancestor
+            print(colorize(
+                f"Source '{raw_source.get('name', args.target)}' is a user preset. OrcaSlicer does not "
+                f"support user-from-user inheritance and silently drops such presets, so the chain was "
+                f"flattened.", Colors.WARNING))
+            print(f"  - Inherits set to nearest system ancestor: {parent_name}")
+            if flattened_overrides:
+                print(f"  - Inlined {len(flattened_overrides)} intermediate setting(s): "
+                      f"{', '.join(sorted(flattened_overrides))}")
+
         # A hallucinated --inherits target is this tool's most expensive silent failure:
         # the preset writes, validates, and then never appears, because OrcaSlicer drops
         # any preset whose parent cannot be resolved. Only an *explicit* --inherits is
@@ -1342,6 +1850,12 @@ def main():
             profile_data, _ = resolver.resolve(raw_source)
         else:
             profile_data = {}
+
+        # Applied for both modes so they stay consistent. Under --de-link-inherits the
+        # resolved body already carries these values (resolve() merges the same chain), so
+        # this re-states rather than changes them; on the normal path it is the only thing
+        # carrying the skipped user presets' settings into the child.
+        profile_data.update(flattened_overrides)
 
         profile_data["inherits"] = args.inherits if args.inherits else parent_name
         profile_data["name"] = args.name

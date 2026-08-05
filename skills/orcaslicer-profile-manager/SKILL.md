@@ -51,9 +51,10 @@ OrcaSlicer configuration properties (originating from C++ `ConfigOption` in `lib
 
 ## Undocumented Serialization Gotchas
 
-The table above covers the documented rules. The five rules below are not
-documented upstream. Each one was confirmed against the OrcaSlicer 2.4.2 option
-tables and the bundled vendor profiles.
+The table above covers the documented rules. The six rules below are not
+documented upstream. Rules 1 to 5 were confirmed against the OrcaSlicer 2.4.2
+option tables and the bundled vendor profiles. Rule 6 was confirmed on a real
+machine and in the OrcaSlicer source.
 
 ### 1. The `"nil"` sentinel
 
@@ -118,6 +119,53 @@ while it was running.
 2. Write the preset files.
 3. Start OrcaSlicer. New presets appear.
 
+### 6. A user preset cannot inherit from another user preset
+
+A user preset must point `inherits` at a **system** preset. If `inherits` names
+another user preset, OrcaSlicer drops the child silently. The UI shows no error.
+The debug log contains one line for each dropped preset:
+
+```
+can not find parent <parent name> for config <child name>!
+```
+
+The summary line in the same log reports the true count, for example
+`loaded 1 presets` when 2 JSON files are on disk.
+
+**Mechanism** (`src/libslic3r/Preset.cpp`, `PresetCollection::load_presets`):
+the loader stages each preset it reads in a local `presets_loaded` deque. It
+merges that deque into the searchable `m_presets` collection only **after** the
+directory loop ends. The parent lookup searches `m_presets`. A sibling user
+preset is therefore never visible as a parent during the pass that reads it.
+
+**Load order is not the cause.** The log shows a parent preset that logs
+"load config successful" before its child, and the child still fails.
+
+**This is not an explicit rule in the code.** OrcaSlicer's inherits-resolution
+code holds no `is_system` check. User-from-user inheritance is not forbidden by
+design. It simply does not resolve on the disk-loading path, and the child is
+lost.
+
+> [!WARNING]
+> **A shared "base" preset with several "variant" presets that inherit from it is
+> not possible in OrcaSlicer.** Each variant must be flat. Each variant inherits
+> directly from a system preset and repeats every shared value in its own body.
+> This means you cannot edit a shared value in one place. A change to a shared
+> value must be applied to every variant file.
+
+**Repair and prevention:**
+
+- `tools/flatten_user_inherits.py` repairs presets that already have a
+  user-preset parent. It inlines the parent values and repoints `inherits` at the
+  nearest system ancestor.
+- `clone` flattens automatically when the source profile is a user preset. It
+  sets `inherits` to the nearest system ancestor and inlines the values that the
+  user parent supplied.
+
+A system parent that is not the direct value source is correct. OrcaSlicer uses
+the parent config only as a starting point (`preset.config = inherit_preset->config;`)
+and then applies the child's own keys on top.
+
 ---
 
 ## User Presets vs System Presets: Two Different JSON Shapes
@@ -139,11 +187,27 @@ though both are `.json` files with mostly the same key names:
 | `setting_id` | Present, 16-char (or short legacy code) | **Must be absent** from the JSON body. Lives only in the paired `.info` file. |
 | `compatible_printers` | Present (full compatibility list) | Absent unless you are deliberately restricting compatibility. |
 | `instantiation` | Sometimes present | Not used. |
-| `inherits` | Present, points further up the built-in chain | **Required, non-empty**, must name an existing profile (system or user). A standalone preset with no `inherits` is rejected — full independence from a parent is not a concept OrcaSlicer's preset system supports. |
+| `inherits` | Present, points further up the built-in chain | **Must name a SYSTEM preset.** A user preset cannot inherit from another user preset — see the warning below and gotcha 6. Point `inherits` at the nearest system ancestor. A preset with no `inherits` may be supported, but this tool does not test that form. Always set `inherits` to a system preset. |
 | `from` | Absent | `"User"` |
 | `version` | Sometimes absent | **Required.** A user preset with no `version` field is silently skipped by the loader even if everything else is correct (confirmed empirically). |
 | `<domain>_settings_id` (`print_settings_id` / `filament_settings_id` / `printer_settings_id`) | — | Should be set, equal to `name`. |
 | Body | Every setting — a complete, self-contained definition | Only the keys that differ from `inherits` (a *diff*), unless you deliberately flattened everything with `--de-link-inherits` |
+
+> [!WARNING]
+> **`inherits` in a user preset must name a SYSTEM preset.** A user preset that
+> inherits from another user preset does not load. OrcaSlicer drops the child
+> silently. It writes `can not find parent <parent> for config <child>!` to the
+> debug log and shows nothing in the UI. Read gotcha 6 before you design a set of
+> presets.
+
+**About a preset with no `inherits`:** an earlier version of this document said
+that OrcaSlicer rejects a user preset that has no `inherits` key. That claim came
+from a bug report. This tool never tested it. Source inspection shows a
+`preset->save(nullptr)` path, a `default_preset_for(config)` fallback for a preset
+with no parent, and a code comment that reads "We support custom root preset now".
+A root preset with no `inherits` is therefore possible, but it is untested here.
+**Use a system parent.** That form is tested and recommended. Do not depend on the
+no-`inherits` form.
 
 **`validate_orca.py clone` produces the correct shape automatically** — do not
 hand-write user preset JSON. If you ever do write one by hand (e.g. via
@@ -157,7 +221,7 @@ schema-valid does **not** mean OrcaSlicer's loader will show it.
 ## Before You Generate: Operator Interview
 
 > [!IMPORTANT]
-> Complete all six steps below **before** you generate any profile. Each step
+> Complete all seven steps below **before** you generate any profile. Each step
 > comes from an observed failure. Use the `ask_question` tool for every question.
 > Do not guess an answer.
 
@@ -175,37 +239,58 @@ Split the work into a process preset and a filament preset. **Tell the operator
 the split before you build.** See [Recipes](references/recipes.md), which marks
 the domain of every key.
 
-### 2. Printer-bound or universal?
+### 2. Does the request imply a shared base with variants?
+
+Look at the whole set of presets that the operator asked for. Ask yourself if the
+set implies one shared "base" preset and two or more "variant" presets that
+inherit from it.
+
+OrcaSlicer cannot express that structure. A user preset cannot inherit from
+another user preset. See § "Undocumented Serialization Gotchas", item 6.
+
+If the set implies a shared base, tell the operator these three facts **before you
+generate anything**:
+
+1. OrcaSlicer cannot express a shared base with variants.
+2. Each variant will be an independent preset that inherits from a system preset.
+3. Each variant will repeat the shared values, so a later change to a shared value
+   must be applied to every variant file.
+
+Get the operator's acknowledgement. Do not generate the presets before the
+operator answers.
+
+### 3. Printer-bound or universal?
 
 See § 5 "Cloning Profiles: Inherited vs Independent" for the exact question and
 the naming rule. Ask it now, not after you generate.
 
-### 3. Which build plate?
+### 4. Which build plate?
 
 The answer selects which of the twelve `*_plate_temp` keys to set. OrcaSlicer
 reads only the pair for the plate that the operator selects, so a correct value
 on the wrong plate does nothing. **Do not guess the plate.** See
 [Recipes](references/recipes.md) § 2.4 for the full twelve-key table.
 
-### 4. Single-material or multi-material?
+### 5. Single-material or multi-material?
 
 A multi-material job needs AMS slot indices. `support_interface_filament` and
 `support_filament` hold an extruder/filament index that depends on the operator's
 own slot layout. Only the operator knows it. Ask for the slot numbers, or leave
 the keys at `"0"` (auto) and tell the operator to set them in the UI.
 
-### 5. Confirm that the parent profile exists
+### 6. Confirm that the parent profile exists and is a system preset
 
 A hallucinated parent name is a real observed failure. `Generic PETG @BBL X1C`
 does **not** exist. The real profiles are `Generic PETG HF @BBL X1C` and
 `Generic PETG @base`.
 
-Verify every name before you put it in `inherits`:
+Verify every name before you put it in `inherits`. Confirm also that the named
+parent is a **system** preset. A user preset as parent breaks the child silently:
 ```bash
 python validate_orca.py list-profiles --domain filament --query "PETG"
 ```
 
-### 6. Confirm the parent's `compatible_printers`
+### 7. Confirm the parent's `compatible_printers`
 
 The parent's `compatible_printers` must include the exact machine preset name you
 bind to, for example `Bambu Lab X1 Carbon 0.8 nozzle`. If it does not, the preset
@@ -271,10 +356,17 @@ python validate_orca.py diff ./profileA.json ./profileB.json --json
 > - **Printer-bound:** Add the exact printer suffix expected by OrcaSlicer (e.g., `@BBL X1C 0.8 nozzle`) to the `--name`.
 > - **Universal:** Do NOT append a printer suffix to `--name`. This is the default now — `clone` never carries `compatible_printers` over from the source unless you pass `--compatible-printers` yourself.
 
-Both options below always set `"inherits"` to the exact profile being cloned
-(never a grandparent) and always strip `type`/`setting_id`/`compatible_printers`
-— see the format table above for why. They differ only in how much of the
-parent's resolved values get redeclared in the child body:
+Both options below always strip `type`/`setting_id`/`compatible_printers` — see
+the format table above for why. They differ only in how much of the parent's
+resolved values get redeclared in the child body:
+
+> [!IMPORTANT]
+> **Source is a system preset:** `clone` sets `"inherits"` to that exact system
+> profile, never a grandparent.
+> **Source is a user preset:** `clone` flattens automatically. It sets
+> `"inherits"` to the nearest **system** ancestor and inlines the values that the
+> user parent supplied. A user preset cannot be a parent — see § "Undocumented
+> Serialization Gotchas", item 6.
 
 ### Option A: Standard Inherited Clone (Child Profile) (Recommended default)
 Body is just your `--set` overrides; everything else is inherited live from the
@@ -289,9 +381,9 @@ python validate_orca.py clone filament "Bambu PLA Basic @BBL X1C" \
 ### Option B: Value-Locked Clone (`--de-link-inherits`)
 Flattens every resolved parent value into the child body explicitly, so the
 child's *values* can never drift when the parent chain is updated. Note:
-`"inherits"` is still kept (pointing at the cloned profile) because OrcaSlicer
-rejects a preset with no inherits at all — this option locks values, it cannot
-achieve full independence from the parent's existence/name.
+`"inherits"` is still kept and still points at a system preset. A system parent is
+the tested form, so this option locks the values but keeps the link. It does not
+achieve full independence from the parent's existence and name.
 ```bash
 python validate_orca.py clone process "0.20mm Standard @Voron" \
   --name "0.20mm Value-Locked Voron" \
@@ -313,6 +405,13 @@ Validate files or directories against Draft 2020-12 schemas:
 python validate_orca.py auto <path/to/profile.json> --json
 ```
 
+Static validation cannot see a runtime rejection. After OrcaSlicer restarts, read
+the log to find out what OrcaSlicer actually loaded:
+```bash
+python validate_orca.py doctor
+```
+See [Finding & Cloning Built-in Profiles](references/finding_and_cloning_builtin_profiles.md) § 5.
+
 ---
 
 ## 7. CLI Tool Subcommand Quick Reference
@@ -329,6 +428,7 @@ python validate_orca.py auto <path/to/profile.json> --json
 | `clone` | Copy profile, assign new 16-char `setting_id`, de-link, & validate | N/A |
 | `template` | Output starter skeleton JSON | stdout / `--out` |
 | `auto` | Auto-detect domain & validate against JSON schema | `--json` |
+| `doctor` | Read the newest OrcaSlicer log; report dropped presets, removed keys, and file-count mismatches | `--json` |
 
 ---
 

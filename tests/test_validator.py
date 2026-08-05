@@ -19,6 +19,10 @@ from validate_orca import (
     generate_setting_id,
     lint_user_preset,
     lint_unknown_keys,
+    is_user_preset,
+    find_nearest_system_ancestor,
+    parse_orca_log,
+    run_doctor,
 )
 
 
@@ -128,6 +132,11 @@ class TestOrcaValidator(unittest.TestCase):
             "--name", "My Cloned Process",
             "--profiles-dir", str(self.examples_dir),
             "--out", str(out_path),
+            # Every clone here writes to a throwaway temp path, never into a real preset
+            # directory, so OrcaSlicer cannot clobber it on exit. Without this the whole
+            # clone half of the suite fails purely because the operator happens to have
+            # OrcaSlicer open.
+            "--ignore-running",
         ] + extra_args
         return subprocess.run(cmd, capture_output=True, text=True)
 
@@ -336,6 +345,7 @@ class TestOrcaValidator(unittest.TestCase):
             str(parent_path),
             "--name", "Compat Bound Clone",
             "--out", str(Path(tmp_dir) / "cloned.json"),
+            "--ignore-running",
         ] + extra_args
         return subprocess.run(cmd, capture_output=True, text=True)
 
@@ -400,6 +410,308 @@ class TestOrcaValidator(unittest.TestCase):
             any("[unresolved inherits]" in w for w in res["warnings"]),
             f"false positive on a resolvable parent: {res['warnings']}",
         )
+
+    # --- Regression coverage: user presets cannot inherit from user presets ---
+    # OrcaSlicer's loader (PresetCollection::load_presets, src/libslic3r/Preset.cpp) stages
+    # each directory pass in a LOCAL deque and only merges it into the preset collection
+    # after the loop ends, while parent lookup (find_preset2 -> find_preset_internal)
+    # searches only the already-merged collection. A user preset therefore can never see a
+    # sibling user preset as its parent, at any load order, and there is no second pass. On
+    # failure the loader logs "can not find parent %1% for config %2%!" and `continue`s --
+    # the preset is DROPPED with no error anywhere in the UI. This was confirmed live: four
+    # of the operator's presets were missing and the debug log named all four.
+    #
+    # The repair is to point "inherits" at the nearest SYSTEM ancestor and inline whatever
+    # the skipped user presets declared. That is faithful to how OrcaSlicer applies a
+    # parent: load_preset does `preset.config = inherit_preset->config;` and then
+    # update_diff_values_to_child_config() lays the child's own keys on top, so the parent
+    # is only ever a starting config. These tests cover the chain walk, the clone wiring,
+    # and the validator warning that catches an already-broken preset on disk.
+
+    ZZ_SYSTEM = "ZZ Flatten System @Unittest"
+    ZZ_USER_A = "ZZ Flatten UserA @Unittest"
+    ZZ_USER_B = "ZZ Flatten UserB @Unittest"
+
+    def _write_flatten_chain(self, tmp_dir):
+        """Builds system <- userA <- userB in tmp_dir and returns (resolver, userB_path).
+
+        userA and userB both declare "outer_wall_speed" so the merge order is observable,
+        and userA alone declares "top_shell_layers" and "sparse_infill_density" so the
+        intermediate's unique contribution is observable too. Names are "ZZ ..."-prefixed so
+        they can never collide with a real profile in an OrcaSlicer install on this machine."""
+        tmp_path = Path(tmp_dir)
+        self._write_parent_fixture(tmp_dir, self.ZZ_SYSTEM)
+
+        user_a = {
+            "name": self.ZZ_USER_A,
+            "from": "User",
+            "version": "2.1.0.19",
+            "inherits": self.ZZ_SYSTEM,
+            "print_settings_id": self.ZZ_USER_A,
+            "outer_wall_speed": "111",
+            "top_shell_layers": "5",
+            "sparse_infill_density": "22%",
+        }
+        user_b = {
+            "name": self.ZZ_USER_B,
+            "from": "User",
+            "version": "2.1.0.19",
+            "inherits": self.ZZ_USER_A,
+            "print_settings_id": self.ZZ_USER_B,
+            "outer_wall_speed": "222",
+        }
+        (tmp_path / "user_a.json").write_text(json.dumps(user_a))
+        user_b_path = tmp_path / "user_b.json"
+        user_b_path.write_text(json.dumps(user_b))
+
+        resolver = ProfileDAGResolver()
+        resolver.scan_directory(tmp_path)
+        return resolver, user_b_path
+
+    def test_find_nearest_system_ancestor_walks_a_user_chain(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            resolver, user_b_path = self._write_flatten_chain(tmp)
+            user_b = json.loads(user_b_path.read_text())
+
+            ancestor, overrides = find_nearest_system_ancestor(resolver, user_b)
+
+            self.assertEqual(ancestor, self.ZZ_SYSTEM)
+            # userB is nearer the child than userA, so its value for the shared key wins.
+            self.assertEqual(overrides["outer_wall_speed"], "222")
+            # ...while userA's own keys still have to survive the flattening.
+            self.assertEqual(overrides["top_shell_layers"], "5")
+            self.assertEqual(overrides["sparse_infill_density"], "22%")
+            # Identity/metadata describes the intermediate preset, not its settings.
+            for meta_key in ("name", "inherits", "from", "version", "print_settings_id"):
+                self.assertNotIn(meta_key, overrides)
+
+    def test_find_nearest_system_ancestor_is_a_noop_for_system_presets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            resolver, _ = self._write_flatten_chain(tmp)
+            system = resolver.name_index[self.ZZ_SYSTEM]
+
+            ancestor, overrides = find_nearest_system_ancestor(resolver, system)
+
+            self.assertFalse(is_user_preset(system))
+            self.assertEqual(ancestor, self.ZZ_SYSTEM)
+            self.assertEqual(overrides, {})
+
+    def test_clone_from_user_preset_flattens_to_system_ancestor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _, user_b_path = self._write_flatten_chain(tmp)
+            out_path = Path(tmp) / "cloned.json"
+            proc = subprocess.run([
+                sys.executable, str(self.root_dir / "validate_orca.py"), "clone", "process",
+                str(user_b_path),
+                "--name", "ZZ Flatten Clone @Unittest",
+                "--out", str(out_path),
+                "--ignore-running",
+                "--set", 'sparse_infill_density="99%"',
+            ], capture_output=True, text=True)
+            self.assertEqual(proc.returncode, 0, f"clone failed: {proc.stderr}")
+            data = json.loads(out_path.read_text())
+
+            # Never the user preset that was cloned -- OrcaSlicer would drop the result.
+            self.assertEqual(data["inherits"], self.ZZ_SYSTEM)
+            # The skipped intermediates' settings are re-declared in the child instead.
+            self.assertEqual(data["outer_wall_speed"], "222")
+            self.assertEqual(data["top_shell_layers"], "5")
+            # ...but an explicit --set still outranks anything inlined from the chain.
+            self.assertEqual(data["sparse_infill_density"], "99%")
+            self.assertEqual(lint_user_preset(data, "process"), [])
+            self.assertIn(self.ZZ_SYSTEM, proc.stdout)
+
+    def _validate_flatten_chain_member(self, filename):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_flatten_chain(tmp)
+            validator = OrcaValidator(self.schema_dir, inherit_dirs=[Path(tmp)])
+            return validator.validate_file(Path(tmp) / filename, domain="process")
+
+    def test_validate_file_warns_on_user_from_user_inherits(self):
+        # user_b.json inherits userA, which is itself a user preset.
+        res = self._validate_flatten_chain_member("user_b.json")
+        matches = [w for w in res["warnings"] if "[user-from-user inherits]" in w]
+        self.assertTrue(matches, f"no user-from-user warning: {res['warnings']}")
+        self.assertIn(self.ZZ_USER_A, matches[0])
+        # The warning is only actionable if it names the parent to switch to.
+        self.assertIn(self.ZZ_SYSTEM, matches[0])
+
+    def test_validate_file_accepts_user_preset_inheriting_a_system_preset(self):
+        # user_a.json inherits the system fixture directly, which is entirely legal.
+        res = self._validate_flatten_chain_member("user_a.json")
+        self.assertFalse(
+            any("[user-from-user inherits]" in w for w in res["warnings"]),
+            f"false positive on a system parent: {res['warnings']}",
+        )
+
+
+    # --- Runtime log forensics: the `doctor` subcommand ---
+    # Every other check in this tool is static analysis and structurally cannot see
+    # what OrcaSlicer did with a file it read. The runtime is silent in the UI but
+    # explicit in its debug log: a preset dropped for an unresolvable parent, keys
+    # stripped by Preset::remove_invalid_keys, and a per-directory "loaded N presets"
+    # tally are all logged. `doctor` reads that log back.
+    #
+    # These fixtures are synthetic log text, deliberately: the tests must not depend
+    # on OrcaSlicer being installed, on the operator's own log, or on the state of
+    # ~/Library/Application Support/OrcaSlicer. The line formats below are copied
+    # verbatim (modulo names) from a real OrcaSlicer 2.4.2 log and from the format
+    # strings in its sources, so a format change breaks these tests rather than
+    # silently degrading the parser to "found nothing".
+
+    LOG_PREFIX = "[error]\t2026-08-05 03:21:42.547656[Thread 0x00000001fbbb1e80]:"
+    INFO_PREFIX = "[info]\t2026-08-05 03:21:42.548137[Thread 0x00000001fbbb1e80]:"
+
+    def _drop_line(self, user_dir, domain, preset, parent):
+        return (f"{self.LOG_PREFIX}can not find parent {parent} for config "
+                f"{Path(user_dir) / domain / (preset + '.json')}!")
+
+    def _loaded_line(self, user_dir, domain, count):
+        return (f'{self.INFO_PREFIX}load_presets: loaded {count} presets from '
+                f'"{Path(user_dir) / domain}", type {domain}')
+
+    def _write_doctor_fixture(self, tmp, presets, log_lines):
+        """Builds a user preset dir ({domain: [names]}) plus a log file, and returns
+        (user_dir, log_path). Only the filenames matter -- doctor counts files."""
+        user_dir = Path(tmp) / "user" / "default"
+        for domain, names in presets.items():
+            (user_dir / domain).mkdir(parents=True, exist_ok=True)
+            for name in names:
+                (user_dir / domain / f"{name}.json").write_text(json.dumps({"name": name}))
+        log_path = Path(tmp) / "debug_Wed_Aug_05_03_21_41_14247.log.0"
+        log_path.write_text("\n".join(log_lines) + "\n")
+        return user_dir, log_path
+
+    def test_doctor_parses_dropped_preset_and_parent(self):
+        lines = [
+            self._drop_line("/u", "process", "ZZ Doctor Child", "ZZ Doctor Missing Parent"),
+            f"{self.LOG_PREFIX}, can not find inherit preset for user preset ZZ Doctor Imported, just skip",
+            f"{self.LOG_PREFIX} can not find parent preset for ZZ Doctor Saved , inherits ZZ Doctor Absent",
+        ]
+        parsed = parse_orca_log("\n".join(lines))
+        by_name = {e["preset"]: e for e in parsed["dropped"]}
+        self.assertEqual(set(by_name), {"ZZ Doctor Child", "ZZ Doctor Imported", "ZZ Doctor Saved"})
+        # The parent is the actionable half of the report -- it names what to fix.
+        self.assertEqual(by_name["ZZ Doctor Child"]["parent"], "ZZ Doctor Missing Parent")
+        self.assertEqual(by_name["ZZ Doctor Child"]["domain"], "process")
+        self.assertEqual(by_name["ZZ Doctor Saved"]["parent"], "ZZ Doctor Absent")
+
+    def test_doctor_parses_removed_incorrect_keys(self):
+        line = (f'{self.LOG_PREFIX}Error in a preset file: The preset "ZZ Doctor Keys" contains '
+                f'the following incorrect keys: zz_not_a_real_setting, zz_also_fake, which were removed')
+        parsed = parse_orca_log(line)
+        self.assertEqual(len(parsed["removed_keys"]), 1)
+        self.assertEqual(parsed["removed_keys"][0]["preset"], "ZZ Doctor Keys")
+        self.assertEqual(parsed["removed_keys"][0]["keys"], ["zz_not_a_real_setting", "zz_also_fake"])
+
+    def _run_doctor_on_removed_key(self, key):
+        # The preset lives in process/, so the removed key is judged against the
+        # process key table -- which is exactly the table `clone --set` trusts.
+        with tempfile.TemporaryDirectory() as tmp:
+            line = (f'{self.LOG_PREFIX}The preset "ZZ Doctor Drift" contains the following '
+                    f'incorrect keys: {key}, which were removed')
+            user_dir, log_path = self._write_doctor_fixture(
+                tmp, {"process": ["ZZ Doctor Drift"]},
+                [line, self._loaded_line(Path(tmp) / "user" / "default", "process", 1)],
+            )
+            return run_doctor(log_path, user_dir)
+
+    def test_doctor_flags_known_key_drift(self):
+        # OrcaSlicer removed a key our table calls valid: either the table is wrong or
+        # the installed OrcaSlicer is not the version it was extracted from.
+        report = self._run_doctor_on_removed_key("top_shell_layers")
+        self.assertEqual(len(report["known_key_drift"]), 1)
+        self.assertEqual(report["known_key_drift"][0]["key"], "top_shell_layers")
+        self.assertIn("process", report["known_key_drift"][0]["known_for"])
+
+    def test_doctor_does_not_flag_drift_for_genuinely_unknown_key(self):
+        # Our table already agrees the key is bogus, so there is no disagreement to report.
+        report = self._run_doctor_on_removed_key("zz_not_a_real_setting")
+        self.assertEqual(report["known_key_drift"], [])
+        self.assertEqual(report["removed_keys"][0]["keys"], ["zz_not_a_real_setting"])
+
+    def test_doctor_detects_count_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "user" / "default"
+            user_dir, log_path = self._write_doctor_fixture(
+                tmp,
+                {"process": ["ZZ Doctor Kept", "ZZ Doctor Lost"], "filament": [], "machine": []},
+                [
+                    self._drop_line(base, "process", "ZZ Doctor Lost", "ZZ Doctor Gone"),
+                    self._loaded_line(base, "process", 1),
+                    self._loaded_line(base, "filament", 0),
+                    self._loaded_line(base, "machine", 0),
+                ],
+            )
+            report = run_doctor(log_path, user_dir)
+
+            counts = {c["domain"]: c for c in report["counts"]}
+            self.assertTrue(counts["process"]["mismatch"])
+            self.assertEqual((counts["process"]["files"], counts["process"]["loaded"]), (2, 1))
+            self.assertEqual(counts["process"]["unaccounted"], ["ZZ Doctor Lost"])
+            self.assertFalse(counts["filament"]["mismatch"])
+            self.assertFalse(counts["machine"]["mismatch"])
+            self.assertFalse(report["healthy"])
+
+    def test_doctor_reports_clean_for_healthy_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "user" / "default"
+            user_dir, log_path = self._write_doctor_fixture(
+                tmp,
+                {"process": ["ZZ Doctor Fine"], "filament": [], "machine": []},
+                [
+                    f"{self.INFO_PREFIX}load_presets: start load_presets",
+                    self._loaded_line(base, "process", 1),
+                    self._loaded_line(base, "filament", 0),
+                    self._loaded_line(base, "machine", 0),
+                ],
+            )
+            report = run_doctor(log_path, user_dir)
+
+            self.assertEqual(report["dropped"], [])
+            self.assertEqual(report["removed_keys"], [])
+            self.assertTrue(report["healthy"])
+            self.assertFalse(any(c["mismatch"] for c in report["counts"]))
+
+    def test_doctor_degrades_gracefully_without_a_log_directory(self):
+        # A machine with no OrcaSlicer install must get a clear message and a distinct
+        # "could not check" exit code -- never a crash, and never a silent pass that
+        # would let this be used as a gate while checking nothing.
+        with tempfile.TemporaryDirectory() as tmp:
+            env = dict(os.environ)
+            env["HOME"] = tmp
+            env["ORCASLICER_LOG_DIR"] = str(Path(tmp) / "definitely-absent-log-dir")
+            env.pop("ORCASLICER_USER_DIR", None)
+            env.pop("APPDATA", None)
+            proc = subprocess.run(
+                [sys.executable, str(self.root_dir / "validate_orca.py"), "doctor", "--no-color"],
+                capture_output=True, text=True, env=env, cwd=tmp,
+            )
+            self.assertEqual(proc.returncode, 2, f"stdout={proc.stdout} stderr={proc.stderr}")
+            self.assertIn("No OrcaSlicer log directory", proc.stdout)
+            self.assertNotIn("Traceback", proc.stderr)
+
+    def test_doctor_cli_json_reports_dropped_preset_and_exits_nonzero(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "user" / "default"
+            user_dir, log_path = self._write_doctor_fixture(
+                tmp,
+                {"process": ["ZZ Doctor Kept", "ZZ Doctor Lost"], "filament": [], "machine": []},
+                [
+                    self._drop_line(base, "process", "ZZ Doctor Lost", "ZZ Doctor Gone"),
+                    self._loaded_line(base, "process", 1),
+                ],
+            )
+            proc = subprocess.run([
+                sys.executable, str(self.root_dir / "validate_orca.py"), "doctor",
+                "--log", str(log_path), "--user-dir", str(user_dir), "--json",
+            ], capture_output=True, text=True)
+            # Non-zero so it is usable as a gate.
+            self.assertEqual(proc.returncode, 1, f"stderr={proc.stderr}")
+            report = json.loads(proc.stdout)
+            self.assertEqual(report["log"], str(log_path))
+            self.assertEqual([d["preset"] for d in report["dropped"]], ["ZZ Doctor Lost"])
+            self.assertFalse(report["healthy"])
 
 
 if __name__ == "__main__":
