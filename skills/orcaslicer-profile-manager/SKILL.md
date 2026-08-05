@@ -9,6 +9,30 @@ This skill equips AI coding assistants (Claude Code, Codex, Antigravity, Cursor,
 
 ---
 
+## Locating the Script
+
+> [!IMPORTANT]
+> Every command in this skill is written as `python validate_orca.py <subcommand>`.
+> `validate_orca.py` means **the copy that sits next to this `SKILL.md` file**, not a
+> file in your current working directory. Resolve it relative to the skill directory.
+> Do not assume the current working directory is the repository root.
+
+```bash
+# Resolve the script from the skill directory, whatever the current directory is.
+SKILL_DIR="$(dirname "$(readlink -f ~/.claude/skills/orcaslicer-profile-manager/SKILL.md)")"
+python "$SKILL_DIR/validate_orca.py" locate
+```
+
+The script needs its sibling `schemas/` directory. It finds that directory through
+`Path(__file__).resolve()`, which follows the symlink back to the repository. Run the
+script through the symlink. Do not copy the file somewhere else.
+
+**Dependencies:** the script needs `jsonschema` and `referencing` (see
+`requirements.txt`). If the system Python does not have them, use the interpreter of
+the repository virtual environment.
+
+---
+
 ## Core OrcaSlicer Architecture & Serialization Rules
 
 OrcaSlicer configuration properties (originating from C++ `ConfigOption` in `libslic3r`) strictly enforce a **string-encoded** serialization format for scalar values:
