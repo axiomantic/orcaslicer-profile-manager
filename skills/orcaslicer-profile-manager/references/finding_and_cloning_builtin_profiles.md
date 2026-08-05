@@ -45,6 +45,10 @@ python scripts/validate_orca.py list-profiles --query "Bambu" --json
 
 ## 4. Cloning and Customizing Profiles
 
+> [!IMPORTANT]
+> **Output Location:** Always output cloned user profiles directly to the cross-platform user default preset location (e.g., `~/Library/Application Support/OrcaSlicer/user/default/<domain>/` on macOS). Use `locate` to find the exact path.
+> **Naming Conventions:** If the profile is specific to a nozzle size, the `--name` parameter must include the exact nozzle suffix expected by OrcaSlicer (e.g., `@BBL X1C 0.8 nozzle`) so that it populates correctly in the UI dropdowns.
+
 Use `clone` to find a built-in profile, copy it to a new output path, generate a new unique 16-character `setting_id`, set a new profile `name`, apply parameter overrides, and validate:
 
 ### Standard Inherited Clone (Child Profile)

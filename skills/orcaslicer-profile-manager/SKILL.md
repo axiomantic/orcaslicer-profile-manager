@@ -74,6 +74,10 @@ python scripts/validate_orca.py diff ./profileA.json ./profileB.json --json
 
 ## 5. Cloning Profiles: Inherited vs Independent (`clone`)
 
+> [!IMPORTANT]
+> **Output Location:** Always output cloned user profiles directly to the cross-platform user default preset location (e.g., `~/Library/Application Support/OrcaSlicer/user/default/<domain>/` on macOS). Use `locate` to find the exact path.
+> **Naming Conventions:** If the profile is specific to a nozzle size, the `--name` parameter must include the exact nozzle suffix expected by OrcaSlicer (e.g., `@BBL X1C 0.8 nozzle`) so that it populates correctly in the UI dropdowns.
+
 ### Option A: Standard Inherited Clone (Child Profile)
 Creates a profile inheriting from a parent preset (e.g. `"inherits": "fdm_process_common"`).
 ```bash
