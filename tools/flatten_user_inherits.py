@@ -16,6 +16,10 @@ config before laying the child's own keys on top.
 
 Nothing is written unless --apply is passed; the default is a dry run.
 
+--apply copies each original preset, and its paired .info, to one timestamped directory
+that is a SIBLING of the repaired directory: `<...>/user/default-backup-YYYYmmdd-HHMMSS/`.
+Backups never go in the preset directory, because OrcaSlicer owns and rewrites it.
+
 Usage:
   tools/flatten_user_inherits.py <preset-dir> [<preset-dir> ...]            # dry run
   tools/flatten_user_inherits.py <preset-dir> --apply                       # rewrite
@@ -23,10 +27,13 @@ Usage:
 
 import argparse
 import json
+import os
 import shutil
 import sys
+import tempfile
+import time
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -113,10 +120,68 @@ def plan_repairs(paths: List[Path], resolver: ProfileDAGResolver) -> List[Dict[s
     return repairs
 
 
-def apply_repair(repair: Dict[str, Any]) -> None:
-    """Rewrites one preset in place, leaving a .bak of the original beside it."""
+class BackupWriter:
+    """Copies each original to ONE timestamped directory OUTSIDE the preset tree.
+
+    The preset directory belongs to OrcaSlicer. It rewrites that directory, it may
+    enumerate or sync it differently in a later version, and the operator must clean by
+    hand anything left there. So backups go to a SIBLING of the directory that is
+    repaired -- alongside it, never below it, so a second run cannot scan its own
+    backups. The relative sub-path (`process/...`, `filament/...`) is kept, so the
+    operator can see the domain of each file and can restore with one copy of the tree.
+
+    The directory is made only when the first file is written. A dry run, or a run with
+    no repairs, thus leaves no empty directory behind.
+    """
+
+    def __init__(self, dirs: List[Path]) -> None:
+        self.dirs = dirs
+        self.timestamp = time.strftime("%Y%m%d-%H%M%S")
+        # The shallowest target is used as the anchor: its sibling is outside every
+        # other target too, even when one target is nested in another.
+        self.base = min(dirs, key=lambda p: len(p.parts)) if dirs else Path.cwd()
+        self.root, self.used_temp = self._pick_root()
+        self.created = False
+
+    def _pick_root(self) -> Tuple[Path, bool]:
+        name = f"{self.base.name or 'presets'}-backup-{self.timestamp}"
+        parent = self.base.parent
+        if parent.is_dir() and os.access(parent, os.W_OK):
+            return parent / name, False
+        return Path(tempfile.gettempdir()) / name, True
+
+    def _relative(self, path: Path) -> Path:
+        for d in self.dirs:
+            try:
+                rel = path.relative_to(d)
+            except ValueError:
+                continue
+            # More than one target directory can hold the same relative path, so the
+            # directory name is kept as well to prevent one backup overwriting another.
+            return Path(d.name) / rel if len(self.dirs) > 1 else rel
+        return Path(path.name)
+
+    def save(self, path: Path) -> None:
+        """Backs up the preset AND its paired .info, if the .info exists.
+
+        The .info sidecar holds the sync identity of the preset. A restore of the .json
+        alone would leave a stale .info, so the pair is always kept together.
+        """
+        rel = self._relative(path)
+        for src in (path, path.with_suffix(".info")):
+            if not src.exists():
+                continue
+            dest = self.root / rel.parent / src.name
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dest)
+            self.created = True
+
+
+def apply_repair(repair: Dict[str, Any], backup: Optional[BackupWriter]) -> None:
+    """Rewrites one preset in place, after the backup of the original is made."""
     path: Path = repair["path"]
-    shutil.copy2(path, path.with_suffix(path.suffix + ".bak"))
+    if backup is not None:
+        backup.save(path)
 
     data = dict(repair["data"])
     data.update(repair["overrides"])
@@ -161,6 +226,8 @@ def main() -> int:
     print(f"Scanned {len(presets)} JSON file(s); {len(repairs)} preset(s) need repair.")
     print("=" * 60)
 
+    backup = BackupWriter(dirs) if (write and repairs) else None
+
     for repair in repairs:
         print(f"{colorize(repair['name'], Colors.BOLD)}")
         print(f"  File          : {repair['path']}")
@@ -173,8 +240,8 @@ def main() -> int:
         else:
             print("  Keys inlined  : 0 (the intermediate declared no settings of its own)")
         if write:
-            apply_repair(repair)
-            print(f"  {colorize('WRITTEN', Colors.OKGREEN)} (original saved as {repair['path'].name}.bak)")
+            apply_repair(repair, backup)
+            print(f"  {colorize('WRITTEN', Colors.OKGREEN)}")
         print()
 
     print("=" * 60)
@@ -182,6 +249,13 @@ def main() -> int:
         print(colorize("Nothing to repair.", Colors.OKGREEN))
     elif write:
         print(colorize(f"Repaired {len(repairs)} preset(s).", Colors.OKGREEN))
+        if backup is not None and backup.created:
+            # Printed once, not per file: the whole run has one backup directory.
+            print(f"Originals saved to: {backup.root}")
+            if backup.used_temp:
+                print(f"  ('{backup.base.parent}' is not writable, so the system "
+                      f"temp directory was used instead.)")
+            print(f"  To restore: cp -R \"{backup.root}/\" \"{backup.base}/\"")
     else:
         print(colorize(f"{len(repairs)} preset(s) would be repaired. Re-run with --apply to write.",
                        Colors.WARNING))

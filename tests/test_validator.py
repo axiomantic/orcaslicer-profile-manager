@@ -638,6 +638,161 @@ class TestOrcaValidator(unittest.TestCase):
             f"false positive on a system parent: {res['warnings']}",
         )
 
+    # --- Backups of the repair tool must NOT land in the preset directory ---
+    # tools/flatten_user_inherits.py rewrites presets in place, so it keeps a copy of
+    # each original. That copy must not be written beside the preset it copies.
+    #
+    # WHY: the user preset directory belongs to OrcaSlicer, not to this tool. OrcaSlicer
+    # rewrites the whole directory when it exits, it enumerates the directory itself
+    # (a later version can read or sync a file it did not write), and anything left
+    # there is litter the operator must remove by hand. This is not hypothetical: an
+    # earlier version wrote "<preset>.json.bak" next to each preset and left four stray
+    # files in the operator's live OrcaSlicer directory.
+    #
+    # The backup therefore goes to ONE timestamped directory that is a SIBLING of the
+    # repaired directory (`<...>/user/default-backup-YYYYmmdd-HHMMSS/`). A sibling, not
+    # a subdirectory, so a second run cannot scan its own backups. The .info sidecar is
+    # copied with its .json, because a restore of the .json alone leaves a stale .info.
+    #
+    # The tool is a CLI script, so these tests drive it by subprocess, as the clone
+    # tests above do. Every path is a tempfile fixture; nothing touches a real install.
+
+    def _write_repairable_tree(self, tmp, with_info=True):
+        """Reproduces the operator's case: a user preset inheriting another USER preset,
+        in a process/ and a filament/ subdirectory, each with a paired .info sidecar.
+        Returns the target directory (`<tmp>/user/default`)."""
+        target = Path(tmp) / "user" / "default"
+        target.mkdir(parents=True)
+
+        # The system ancestors must be indexable, so they sit in the scanned tree. They
+        # carry "type", which makes them system presets, so they are never repaired.
+        self._write_parent_fixture(target, self.ZZ_SYSTEM)
+        (target / "zz_system_filament.json").write_text(json.dumps({
+            "name": "ZZ Flatten System Filament @Unittest",
+            "type": "filament",
+            "filament_type": ["PLA"],
+        }))
+
+        specs = [
+            ("process", "print_settings_id", self.ZZ_SYSTEM, "outer_wall_speed"),
+            ("filament", "filament_settings_id",
+             "ZZ Flatten System Filament @Unittest", "filament_flow_ratio"),
+        ]
+        for domain, id_key, system_name, setting in specs:
+            (target / domain).mkdir()
+            parent_name = f"ZZ Backup Parent {domain} @Unittest"
+            child_name = f"ZZ Backup Child {domain} @Unittest"
+            (target / domain / "parent.json").write_text(json.dumps({
+                "name": parent_name, "from": "User", "version": "2.1.0.19",
+                "inherits": system_name, id_key: parent_name, setting: "111",
+            }))
+            (target / domain / "child.json").write_text(json.dumps({
+                "name": child_name, "from": "User", "version": "2.1.0.19",
+                "inherits": parent_name, id_key: child_name,
+            }))
+            if with_info:
+                for stem in ("parent", "child"):
+                    (target / domain / f"{stem}.info").write_text(
+                        "sync_info = create\nuser_id = \nsetting_id = \n"
+                    )
+        return target
+
+    def _run_flatten(self, target, extra_args=()):
+        proc = subprocess.run([
+            sys.executable, str(self.root_dir / "tools" / "flatten_user_inherits.py"),
+            str(target), "--ignore-running", *extra_args,
+        ], capture_output=True, text=True)
+        self.assertNotIn("Traceback", proc.stderr)
+        self.assertEqual(proc.returncode, 0, f"flatten failed: {proc.stderr}")
+        return proc
+
+    def _backup_dirs(self, tmp):
+        """Every sibling backup directory of `<tmp>/user/default`."""
+        return sorted((Path(tmp) / "user").glob("default-backup-*"))
+
+    def test_flatten_apply_writes_backups_outside_the_preset_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = self._write_repairable_tree(tmp)
+            proc = self._run_flatten(target, ["--apply"])
+
+            backups = self._backup_dirs(tmp)
+            self.assertEqual(len(backups), 1, f"expected one backup dir, got {backups}")
+            # The backup is a SIBLING of the preset directory, never inside it -- so a
+            # second run scans the presets only, never its own backups.
+            self.assertEqual(backups[0].parent, target.parent)
+            self.assertNotIn(target, backups[0].parents)
+            # Nothing at all was added under the preset directory.
+            self.assertEqual(list(target.glob("**/*.bak")), [],
+                             "the tool littered the preset directory with .bak files")
+            self.assertEqual(list(target.glob("**/*backup*")), [])
+            # The path is reported once, with a restore hint.
+            self.assertEqual(proc.stdout.count(str(backups[0])), 2)   # path line + hint
+            self.assertIn("Originals saved to:", proc.stdout)
+            self.assertIn("To restore:", proc.stdout)
+
+            # The repair itself still happened: the user parent is gone from "inherits".
+            child = json.loads((target / "process" / "child.json").read_text())
+            self.assertEqual(child["inherits"], self.ZZ_SYSTEM)
+            self.assertEqual(child["outer_wall_speed"], "111")
+
+    def test_flatten_backs_up_the_info_sidecar_and_keeps_the_domain_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = self._write_repairable_tree(tmp)
+            self._run_flatten(target, ["--apply"])
+            root = self._backup_dirs(tmp)[0]
+
+            for domain in ("process", "filament"):
+                json_backup = root / domain / "child.json"
+                info_backup = root / domain / "child.info"
+                self.assertTrue(json_backup.is_file(), f"no .json backup for {domain}")
+                # A .json restored without its .info leaves a stale sync identity.
+                self.assertTrue(info_backup.is_file(), f"no .info backup for {domain}")
+                # The backup holds the ORIGINAL, not the repaired file.
+                self.assertEqual(
+                    json.loads(json_backup.read_text())["inherits"],
+                    f"ZZ Backup Parent {domain} @Unittest",
+                )
+
+    def test_flatten_omits_the_info_backup_when_there_is_no_sidecar(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = self._write_repairable_tree(tmp, with_info=False)
+            self._run_flatten(target, ["--apply"])
+            root = self._backup_dirs(tmp)[0]
+            self.assertTrue((root / "process" / "child.json").is_file())
+            self.assertEqual(list(root.glob("**/*.info")), [])
+
+    def test_flatten_dry_run_creates_no_backup_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = self._write_repairable_tree(tmp)
+            # The default IS the dry run; --dry-run is only the explicit spelling.
+            for args in ([], ["--dry-run"], ["--apply", "--dry-run"]):
+                proc = self._run_flatten(target, args)
+                self.assertIn("DRY RUN", proc.stdout)
+                self.assertEqual(self._backup_dirs(tmp), [],
+                                 f"a dry run ({args}) still created a backup directory")
+                self.assertEqual(list(target.glob("**/*.bak")), [])
+            # ...and the presets on disk are untouched.
+            child = json.loads((target / "process" / "child.json").read_text())
+            self.assertEqual(child["inherits"], "ZZ Backup Parent process @Unittest")
+
+    def test_flatten_creates_no_backup_directory_when_nothing_needs_repair(self):
+        # An empty backup directory is litter too, in a place the operator will look.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "user" / "default"
+            (target / "process").mkdir(parents=True)
+            self._write_parent_fixture(target, self.ZZ_SYSTEM)
+            healthy = "ZZ Backup Healthy @Unittest"
+            (target / "process" / "healthy.json").write_text(json.dumps({
+                "name": healthy, "from": "User", "version": "2.1.0.19",
+                "inherits": self.ZZ_SYSTEM, "print_settings_id": healthy,
+            }))
+
+            proc = self._run_flatten(target, ["--apply"])
+
+            self.assertIn("Nothing to repair.", proc.stdout)
+            self.assertEqual(self._backup_dirs(tmp), [])
+            self.assertNotIn("Originals saved to:", proc.stdout)
+
 
     # --- Runtime log forensics: the `doctor` subcommand ---
     # Every other check in this tool is static analysis and structurally cannot see

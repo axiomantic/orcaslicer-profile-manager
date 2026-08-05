@@ -157,7 +157,10 @@ lost.
 
 - `tools/flatten_user_inherits.py` repairs presets that already have a
   user-preset parent. It inlines the parent values and repoints `inherits` at the
-  nearest system ancestor.
+  nearest system ancestor. `--apply` first copies each original preset, and its
+  paired `.info`, to `<preset-dir>-backup-<YYYYmmdd-HHMMSS>/`. That directory is a
+  sibling of the preset directory, because OrcaSlicer owns and rewrites its own
+  directory. The default is a dry run, which writes nothing.
 - `clone` flattens automatically when the source profile is a user preset. It
   sets `inherits` to the nearest system ancestor and inlines the values that the
   user parent supplied.

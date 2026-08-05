@@ -40,8 +40,10 @@ Profiles in OrcaSlicer often form an inheritance tree:
 > starting point and then applies the child's own keys on top.
 >
 > `tools/flatten_user_inherits.py` repairs presets that already carry a
-> user-preset parent. `clone` flattens automatically when the source is a user
-> preset. See SKILL.md § "Undocumented Serialization Gotchas", item 6.
+> user-preset parent. It is a dry run unless you give `--apply`, which first copies
+> each original preset and its `.info` to `<preset-dir>-backup-<timestamp>/`, a
+> sibling of the preset directory. `clone` flattens automatically when the source is
+> a user preset. See SKILL.md § "Undocumented Serialization Gotchas", item 6.
 
 ### 1.1 Never name a preset `Base`
 
