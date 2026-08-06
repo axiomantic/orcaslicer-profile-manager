@@ -238,6 +238,18 @@ be applied to every file that holds it. There is no single place to edit it.
    `flush_into_support` reuse the purged filament instead of discarding it. At 600
    to 800 mm³ per change this saves a large amount of material.
    `flush_into_support` suits a mutual-support print especially well.
+5. **Verify that the support interface exists in the sliced file. (Mandatory
+   before you print.)**
+   A manual support type (`normal(manual)`, `tree(manual)`) generates support
+   **only** from painted faces. An unpainted face gets no support.
+   `enable_support` still reads as `1` in the UI, and the slice completes with no
+   warning. Check three things before you start the print:
+   - Check the exported file name. Confirm that you exported the plate you
+     painted.
+   - Check `; filament used [g]` in the G-code. A zero for the interface filament
+     means the interface never printed.
+   - Run `grep -c "FEATURE: Support interface" out.gcode`. A count of zero means
+     the same.
 
 `validate_orca.py clone` prints the same checklist when the preset it writes implies
 a multi-material or support-interface setup.
@@ -329,10 +341,17 @@ word.
 
 ### 2.3 Process domain: support style and type
 
-| Key | Valid values |
-|---|---|
-| `support_style` | `default`, `grid`, `snug`, `tree_slim`, `tree_strong`, `tree_hybrid`, `organic` |
-| `support_type` | `normal(auto)`, `tree(auto)`, `normal(manual)`, `tree(manual)`, `hybrid(auto)` |
+| Key | Valid values | Reference value |
+|---|---|---|
+| `support_style` | `default`, `grid`, `snug`, `tree_slim`, `tree_strong`, `tree_hybrid`, `organic` | parent value |
+| `support_type` | `normal(auto)`, `tree(auto)`, `normal(manual)`, `tree(manual)`, `hybrid(auto)` | `tree(manual)` |
+
+> [!IMPORTANT]
+> **Write `support_type` into the process preset. Do not leave it inherited.** The
+> support type decides how OrcaSlicer classifies the model layer above the
+> interface, and therefore which speed and fan keys govern that layer. An
+> inherited value can change that classification silently. Section 2.6 gives the
+> mechanism.
 
 ### 2.4 Filament domain: bed temperature compromise
 
@@ -366,6 +385,111 @@ A value of `"0"` means the filament does not support that plate.
 > [!WARNING]
 > There is **no** `filament_is_support_interface` key. `filament_is_support` is
 > the only support flag in the filament domain.
+
+### 2.6 Process domain: tuning the model layer above the interface
+
+The model layer that sits on the support interface is the layer that fails. The
+findings below come from a sliced G-code of a failed print (OrcaSlicer 2.4.2,
+Bambu X1C, 0.8 mm nozzle, PLA model on a PETG interface,
+`support_top_z_distance = 0`) and from the OrcaSlicer 2.4.2 source.
+
+**Gap infill escapes overhang handling. This is the key finding.** Gap infill is
+neither a perimeter nor a bridge, so the overhang speed ladder and `bridge_speed`
+both skip it. On a small overhang the gap infill **is** the fill. The material
+with the least support below it is therefore laid the fastest.
+
+Measured on one layer of the failed print:
+
+| Feature | Commanded value | Governing key |
+|---|---|---|
+| `Outer wall` | — | `outer_wall_speed` |
+| `Overhang wall` | F1800 = 30 mm/s | `bridge_speed` |
+| `Gap infill` | F2352 to F2715 = 39 to 45 mm/s | `gap_infill_speed` = 50 |
+| Part cooling fan | M106 S255 = 100% | `overhang_fan_speed` |
+
+Lower `gap_infill_speed` to the value of `bridge_speed`.
+
+> [!WARNING]
+> `gap_infill_speed` is global. You cannot scope it to an overhang. Every gap
+> infill in the print becomes slower.
+
+Process-domain keys for this section:
+
+| Key | Type | Reference value | Reason |
+|---|---|---|---|
+| `support_type` | enum string | `"tree(manual)"` | Pins the classification of the layer above the interface. See section 2.3. |
+| `gap_infill_speed` | array of float strings | `["30"]`, equal to `bridge_speed` | Gap infill gets no overhang slowdown of its own. |
+
+#### The support type decides the classification
+
+`PrintObject::detect_surfaces_type()` in `src/libslic3r/PrintObject.cpp` computes:
+
+```cpp
+bool bottom_is_fully_supported = has_support() && support_top_z_distance == 0 && is_auto(support_type);
+SurfaceType surface_type_bottom_other = bottom_is_fully_supported ? stBottom : stBottomBridge;
+```
+
+`is_auto()` returns true for `normal(auto)` and `tree(auto)` only.
+
+| `support_type` | Classification with `support_top_z_distance = 0` | Effect |
+|---|---|---|
+| `normal(auto)`, `tree(auto)` | bottom surface (`stBottom`) | Bridge speed, bridge flow, and the overhang fan do **not** apply. |
+| `normal(manual)`, `tree(manual)` | bridge (`stBottomBridge`) | Bridge speed and the overhang speed and fan **do** apply. |
+
+> [!WARNING]
+> `bottom_is_fully_supported` is computed once per **object**, not per layer. An
+> auto support type plus a zero Z distance therefore removes bridge handling from
+> **every** bottom surface in that object. This includes real mid-air overhangs
+> that have no support below them.
+
+#### A small overhang has no bottom surface region
+
+In the real G-code the layer above the interface held only `Outer wall`,
+`Overhang wall`, and `Gap infill`. It held **no** `Bottom surface` region. The
+overhang was one small flat face, and the perimeters and the gap infill covered
+it completely.
+
+Two consequences follow:
+
+- `initial_layer_infill_speed` governs `erBottomSurface`. It does nothing on a
+  small overhang. Do not reach for it.
+- `bottom_solid_infill_flow_ratio` is the only flow key that reaches an
+  `erBottomSurface` region. It is equally useless here.
+
+#### Read the real values before you change them
+
+In the failed print the overhang walls already ran at `bridge_speed`, and the fan
+already ran at 100%. `fan_min_speed`, `fan_max_speed`, `overhang_fan_speed`, and
+`additional_cooling_fan_speed` were all `100`. Speed and fan were exhausted.
+
+Read the G-code first:
+
+```bash
+# Which features exist in the print.
+grep -o "; FEATURE: .*" out.gcode | sort | uniq -c
+
+# Find the interface layer.
+grep -n "FEATURE: Support interface" out.gcode
+```
+
+Then read the `F` values and the `M106` values in the model features that follow
+the interface layer.
+
+> [!NOTE]
+> OrcaSlicer writes `; FEATURE: ` on Bambu Lab printers. It writes `;TYPE:` on
+> other printers. Match the marker to your machine.
+
+> [!NOTE]
+> **Inferred, not verified.** The two levers below are reasoned from the option
+> tooltips, not measured. OrcaSlicer documents
+> `support_interface_top_layers` only as "Number of top interface layers".
+>
+> - Raise `support_interface_top_layers` from `"2"` to `"3"`. A thicker interface
+>   platform deflects less under the nozzle.
+> - Raise `support_interface_spacing` from `"0"` to a small non-zero value. PLA
+>   cannot bond to PETG, so the interface gains mechanical keying instead.
+>   Trade-off: the gaps create small unsupported spans and lower the surface
+>   finish. Test on a coupon first.
 
 ### What you cannot do in a preset (Recipe 2)
 

@@ -51,10 +51,10 @@ OrcaSlicer configuration properties (originating from C++ `ConfigOption` in `lib
 
 ## Undocumented Serialization Gotchas
 
-The table above covers the documented rules. The six rules below are not
+The table above covers the documented rules. The seven rules below are not
 documented upstream. Rules 1 to 5 were confirmed against the OrcaSlicer 2.4.2
-option tables and the bundled vendor profiles. Rule 6 was confirmed on a real
-machine and in the OrcaSlicer source.
+option tables and the bundled vendor profiles. Rules 6 and 7 were confirmed on a
+real machine and in the OrcaSlicer source.
 
 ### 1. The `"nil"` sentinel
 
@@ -168,6 +168,27 @@ lost.
 A system parent that is not the direct value source is correct. OrcaSlicer uses
 the parent config only as a starting point (`preset.config = inherit_preset->config;`)
 and then applies the child's own keys on top.
+
+### 7. The G-code is the ground truth for what a setting did
+
+A preset value tells you what you asked for. It does not tell you which key
+governed a given extrusion. One setting can change how the slicer classifies a
+region, and a different key then controls the speed and the fan for it. Read the
+sliced file before you tune:
+
+```bash
+# Which features exist in the print.
+grep -o "; FEATURE: .*" out.gcode | sort | uniq -c
+```
+
+Then read the `F` values and the `M106` values inside the feature you care about.
+
+OrcaSlicer writes `; FEATURE: ` on Bambu Lab printers. It writes `;TYPE:` on
+other printers.
+
+A worked example is in [recipes.md](references/recipes.md) § 2.6. There, gap
+infill on an overhang got no overhang slowdown, because gap infill is neither a
+perimeter nor a bridge.
 
 ---
 
