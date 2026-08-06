@@ -60,6 +60,40 @@ either, because every user preset is flat and has no user parent.
 
 See [Recipes](recipes.md) § "Naming: do not use the word Base".
 
+### 1.2 The project layer wins over both presets
+
+Inheritance is not the last word. There are three settings layers:
+
+```
+system preset  ->  user preset  ->  PROJECT
+```
+
+A saved `.3mf` project holds a complete copy of every setting, frozen at save
+time, in `Metadata/project_settings.config` inside the archive. When the operator
+opens that project, the stored project values win. An edit to a user preset does
+**not** reach an already-saved project.
+
+> [!WARNING]
+> An edited preset that appears to do nothing is usually a project override. To
+> clear it, open the project, and click the reset arrow beside the modified
+> preset name in the Process dropdown.
+
+A `.3mf` is a zip file. Read the effective project settings directly, without
+OrcaSlicer:
+
+```bash
+unzip -p project.3mf Metadata/project_settings.config
+```
+
+To confirm which value a slice actually used, read the exported G-code header. It
+holds the effective value of every setting:
+
+```bash
+grep -E "^; (gap_infill_speed|support_interface_top_layers) " out.gcode
+```
+
+See SKILL.md § "Undocumented Serialization Gotchas", items 7 and 8.
+
 ## 2. Inherited Profiles vs Independent (De-linked) Profiles
 
 Relying on direct inheritance from stock vendor profiles carries a risk:

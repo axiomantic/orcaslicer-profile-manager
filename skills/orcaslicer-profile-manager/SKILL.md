@@ -51,10 +51,11 @@ OrcaSlicer configuration properties (originating from C++ `ConfigOption` in `lib
 
 ## Undocumented Serialization Gotchas
 
-The table above covers the documented rules. The seven rules below are not
+The table above covers the documented rules. The eight rules below are not
 documented upstream. Rules 1 to 5 were confirmed against the OrcaSlicer 2.4.2
 option tables and the bundled vendor profiles. Rules 6 and 7 were confirmed on a
-real machine and in the OrcaSlicer source.
+real machine and in the OrcaSlicer source. Rule 8 was confirmed on a real
+machine.
 
 ### 1. The `"nil"` sentinel
 
@@ -190,6 +191,61 @@ A worked example is in [recipes.md](references/recipes.md) § 2.6. There, gap
 infill on an overhang got no overhang slowdown, because gap infill is neither a
 perimeter nor a bridge.
 
+### 8. A saved project file overrides the preset
+
+There are three settings layers, not two:
+
+```
+system preset  ->  user preset  ->  PROJECT
+```
+
+A saved `.3mf` project freezes a complete copy of every setting at save time. The
+copy is in `Metadata/project_settings.config` inside the archive. When the
+operator opens that project, the stored project values win over the preset. An
+edit to a user preset therefore does **not** reach an already-saved project.
+
+> [!WARNING]
+> **This is the most likely reason an edited preset looks like it did nothing.**
+> The preset on disk holds the new value. The project holds the old value. The
+> slice uses the old value, and no error appears.
+
+Confirmed instance: the user preset `0.40mm 0.8N Mutual Support @BBL X1C 0.8
+nozzle` was edited to `gap_infill_speed` 30 and `support_interface_top_layers` 3.
+The project file still held:
+
+```
+"gap_infill_speed": "50"
+"support_interface_top_layers": "2"
+```
+
+A re-slice of that project would have used 50 and 2.
+
+**How the operator clears the project overrides:**
+
+1. Open the project.
+2. Look at the Process dropdown. It shows the preset name with a modified marker.
+3. Click the reset arrow beside the preset name. The project discards its stored
+   overrides and takes the current preset values.
+
+**How to verify.** This is gotcha 7 applied to a different layer: read the
+product, not the preset. The exported G-code header holds the **effective** value
+of every setting.
+
+```bash
+grep -E "^; (gap_infill_speed|support_interface_top_layers) " out.gcode
+```
+
+An old value in the header means the project overrides are still in force.
+
+A `.3mf` is a zip file, so you can read the effective project settings directly.
+You do not need to open OrcaSlicer:
+
+```bash
+unzip -p project.3mf Metadata/project_settings.config
+```
+
+That is the fast way to find out what a project will slice with.
+
 ---
 
 ## User Presets vs System Presets: Two Different JSON Shapes
@@ -248,6 +304,10 @@ schema-valid does **not** mean OrcaSlicer's loader will show it.
 > Complete all seven steps below **before** you generate any profile. Each step
 > comes from an observed failure. Use the `ask_question` tool for every question.
 > Do not guess an answer.
+>
+> Ask also whether the operator will slice a saved `.3mf` project. An edit to a
+> preset does not update an already-saved project. See § "Undocumented
+> Serialization Gotchas", item 8.
 
 ### 1. Classify every requested change by domain first
 
